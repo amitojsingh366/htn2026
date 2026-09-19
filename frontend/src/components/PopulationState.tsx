@@ -9,9 +9,9 @@ export interface PopulationStateData {
 }
 
 export interface PopulationStateProps {
-  /** Base URL for the FastAPI backend (e.g. "http://localhost:8000") */
+  /** Base URL for the Worker backend (e.g. "http://localhost:8787") */
   apiBaseUrl?: string;
-  /** Custom WebSocket URL (e.g. "ws://localhost:8000/ws/population"). Auto-derived from apiBaseUrl if omitted. */
+  /** Custom WebSocket URL (e.g. "ws://localhost:8787/ws/population"). Auto-derived from apiBaseUrl if omitted. */
   wsUrl?: string;
   /** Whether to use WebSocket for 0-latency live streaming. Defaults to true. */
   useWebSocket?: boolean;
@@ -32,7 +32,7 @@ export interface PopulationStateProps {
 }
 
 export const PopulationState: React.FC<PopulationStateProps> = ({
-  apiBaseUrl = 'http://localhost:8000',
+  apiBaseUrl = 'http://localhost:8787',
   wsUrl,
   useWebSocket = true,
   pollIntervalMs,
