@@ -6,6 +6,15 @@ export interface PopulationStateData {
   num_infected: number;
   num_humans: number;
   survived_pct: number;
+  game_over?: boolean;
+  started_at?: number | null;
+  patient_zero_id?: string | null;
+  rankings?: Array<{
+    rank: number;
+    device_id: string;
+    state: string;
+    survival_time_seconds: number;
+  }>;
 }
 
 export interface PopulationStateProps {
@@ -91,6 +100,10 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           num_infected: infected,
           num_humans: humans,
           survived_pct: Number(pct.toFixed(1)),
+          game_over: json.game_over,
+          started_at: json.started_at,
+          patient_zero_id: json.patient_zero_id,
+          rankings: json.rankings,
         };
 
         setData(updated);
@@ -142,6 +155,10 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
               num_infected: infected,
               num_humans: humans,
               survived_pct: Number(pct.toFixed(1)),
+              game_over: rawData.game_over,
+              started_at: rawData.started_at,
+              patient_zero_id: rawData.patient_zero_id,
+              rankings: rawData.rankings,
             };
 
             setData(updated);

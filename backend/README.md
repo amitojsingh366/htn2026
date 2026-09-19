@@ -23,12 +23,15 @@ Unprefixed paths address the game `default`, so the original endpoints are uncha
 ```
 GET  /population-state     GET  /num-players      POST /add-player
 GET  /health               GET  /num-infected     POST /add-infected
-GET  /ws/population                               POST /reset-population
+GET  /rankings             GET  /ws/population    POST /device-event
+                                                  POST /reset-population
 ```
 
 The same routes are available per game, which is where `plan.md` §5.2 is headed:
 
 ```
+POST /api/v1/games/{game_id}/device-event
+GET  /api/v1/games/{game_id}/rankings
 POST /api/v1/games/{game_id}/add-infected
 GET  /api/v1/games/{game_id}/population-state
 WS   /api/v1/games/{game_id}/ws/population

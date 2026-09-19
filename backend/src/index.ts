@@ -66,6 +66,15 @@ export default {
         case "/num-infected":
           return json({ num_infected: (await stub.getState()).num_infected });
 
+        case "/rankings":
+        case "/leaderboard":
+          return json(await stub.getRankings(gameId));
+
+        case "/device-state": {
+          const deviceId = url.searchParams.get("device_id") || url.searchParams.get("deviceId") || "";
+          return json(await stub.getDeviceState(deviceId));
+        }
+
         case "/ws/population":
           return json({
             message: `This is a WebSocket endpoint. Connect with ws(s)://${url.host}${url.pathname}`,
@@ -76,6 +85,30 @@ export default {
 
     if (request.method === "POST") {
       switch (route) {
+        case "/start-game":
+        case "/game/start": {
+          const result = await stub.startGame(gameId);
+          return json(result);
+        }
+
+        case "/device-event":
+        case "/esp/event":
+        case "/device-state": {
+          let body: unknown;
+          try {
+            body = await request.json();
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400);
+          }
+
+          try {
+            const state = await stub.recordDeviceEvent(body as any);
+            return json({ message: "Device event recorded", ...state });
+          } catch (err: any) {
+            return json({ error: err?.message || "Failed to record event" }, 400);
+          }
+        }
+
         case "/add-player": {
           const state = await stub.addPlayer();
           return json({ message: "Player added", ...state });
@@ -86,6 +119,7 @@ export default {
           return json({ message: "Infected added", ...state });
         }
 
+        case "/reset-game":
         case "/reset-population": {
           const state = await stub.reset();
           return json({ message: "Population reset", ...state });
