@@ -65,3 +65,6 @@ Desktop.ini
 *.tmp
 *.bak
 *.swp
+# Cloudflare Workers
+.wrangler/
+.dev.vars

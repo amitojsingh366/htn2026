@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { PopulationState } from './components/PopulationState';
 import './App.css';
 
-const API_BASE = 'http://localhost:8000';
+// Points at `wrangler dev` by default; set VITE_API_BASE to the deployed Worker URL.
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787';
 
 function App() {
   const [isSimulating, setIsSimulating] = useState(false);
   const [actionStatus, setActionStatus] = useState<string>('Ready');
 
-  // Interactive buttons to trigger changes on the FastAPI backend
+  // Interactive buttons to trigger changes on the Worker backend
   const handleInfect = async () => {
     try {
       setActionStatus('Infecting human...');
@@ -69,7 +70,7 @@ function App() {
         <div className="header-badge">HTN 2026 GAME DASHBOARD</div>
         <h1>Game Population Monitor</h1>
         <p className="subtitle">
-          Real-time survivor ratio tracking synced with FastAPI backend
+          Real-time survivor ratio tracking synced with the Workers backend
         </p>
       </header>
 
@@ -85,7 +86,7 @@ function App() {
       {/* Interactive Backend Trigger Controls */}
       <section className="controls-panel">
         <div className="controls-header">
-          <h3>FastAPI Live Controls</h3>
+          <h3>Live Controls</h3>
           <span className="status-pill">{actionStatus}</span>
         </div>
 
@@ -131,7 +132,7 @@ function App() {
 {`import { PopulationState } from './components/PopulationState';
 
 // 1. Live real-time streaming via WebSockets (0ms latency, zero HTTP poll spam):
-<PopulationState apiBaseUrl="http://localhost:8000" useWebSocket={true} />
+<PopulationState apiBaseUrl="http://localhost:8787" useWebSocket={true} />
 
 // 2. Controlled / Static props mode:
 <PopulationState totalPlayers={50} infectedCount={16} />`}
