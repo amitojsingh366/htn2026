@@ -208,7 +208,12 @@ static zt_err_t queue_commands(const zt_gateway_commands_t *batch)
                 break;
             }
         }
-        if (g->command_count==GW_COMMANDS) return ZT_ERR_BUSY;
+        /* The server retains every command until actual badge receipts arrive.
+         * A full relay queue must not pin the only inbound mailbox: doing so
+         * stops clock/ACK/event traffic and eventually tears down live sync for
+         * everyone while one unreachable target occupies the game queue.
+         * Leave overflow for server replay without claiming badge application. */
+        if (g->command_count==GW_COMMANDS) continue;
         g->commands[g->command_count++]=*c;
     }
     return ZT_OK;
@@ -334,26 +339,22 @@ zt_err_t zt_gateway_bridge_publish(const zt_gateway_message_t *verified)
     }
 }
 
-static void commands_service(uint64_t now)
+static bool command_service(unsigned index,uint64_t now)
 {
     gateway_t *g=zt_gw;
-    if (!g->command_count) return;
-    unsigned index=0;
-    for (unsigned i=0;i<g->command_count;++i)
-        if (g->commands[i].type==ZT_CMD_END_ROUND || g->commands[i].type==ZT_CMD_FINAL_RESULT) { index=i; break; }
     zt_gateway_command_t *c=&g->commands[index]; zt_checkpoint_t cp;
-    if (!zt_game_admission_enabled() && c->type!=ZT_CMD_RESET_GAME) return;
-    if (c->type!=ZT_CMD_RESET_GAME && (zt_store_load_checkpoint(c->round_id,&cp)!=ZT_OK || cp.round_id!=c->round_id)) return;
+    if (!zt_game_admission_enabled() && c->type!=ZT_CMD_RESET_GAME) return false;
+    if (c->type!=ZT_CMD_RESET_GAME && (zt_store_load_checkpoint(c->round_id,&cp)!=ZT_OK || cp.round_id!=c->round_id)) return false;
     zt_server_command_t target={.round_id=c->round_id,.server_id=0,
         .command={.command_seq=c->seq,.kind=c->type,.target_slot=c->target,.valid_until_elapsed_ms=c->valid_until_elapsed_ms}};
     size_t size=0; zt_err_t r=ZT_ERR_NOT_IMPLEMENTED;
     if (c->type==ZT_CMD_PREPARE_ROUND) {
-        if (cp.snapshot_rev<c->args.prepare.snapshot_rev || cp.roster_hash!=c->args.prepare.roster_hash) return;
+        if (cp.snapshot_rev<c->args.prepare.snapshot_rev || cp.roster_hash!=c->args.prepare.roster_hash) return false;
         r=zt_wire_encode_prepare_round_args(&c->args.prepare,target.command.args,sizeof(target.command.args),&size);
     } else if (c->type==ZT_CMD_START_ROUND) {
-        if (cp.phase<ZT_PHASE_PREPARED) return;
+        if (cp.phase<ZT_PHASE_PREPARED) return false;
         zt_clock_sample_t clock;
-        if (!clock_sample(now,c->args.start.start_time_ms,&clock)) { g->sync_due=0; return; }
+        if (!clock_sample(now,c->args.start.start_time_ms,&clock)) { g->sync_due=0; return false; }
         zt_wire_start_round_args_t a={c->args.start.snapshot_id,c->args.start.roster_hash,c->args.start.patient_zero_slot,
             c->args.start.initial_role_rev,clock.elapsed_ms,c->args.start.duration_ms,(uint16_t)clock.uncertainty_ms};
         r=zt_wire_encode_start_round_args(&a,target.command.args,sizeof(target.command.args),&size);
@@ -376,7 +377,24 @@ static void commands_service(uint64_t now)
     if (r==ZT_OK) { target.command.args_len=size; r=g->sinks.command ? g->sinks.command(&target,g->sinks.context) : ZT_ERR_INVALID_STATE; }
     if (r==ZT_OK || r==ZT_ERR_NOT_IMPLEMENTED) {
         memmove(g->commands+index,g->commands+index+1,(--g->command_count-index)*sizeof(g->commands[0]));
+        return true;
     } else if (r!=ZT_ERR_BUSY) g->status.last_error=r;
+    return false;
+}
+
+static void commands_service(uint64_t now)
+{
+    gateway_t *g=zt_gw;
+    /* Check each bounded entry, prioritizing end/results. A command awaiting
+     * its clock, snapshot or game slot cannot hold unrelated targets or RESET
+     * behind it. At most one successful transfer per service turn. */
+    for (unsigned priority=0;priority<2;++priority) {
+        for (unsigned i=0;i<g->command_count;++i) {
+            bool terminal=g->commands[i].type==ZT_CMD_END_ROUND || g->commands[i].type==ZT_CMD_FINAL_RESULT;
+            if (terminal!=(priority==0)) continue;
+            if (command_service(i,now)) return;
+        }
+    }
 }
 
 static void hello_build(zt_gateway_hello_t *hello)
