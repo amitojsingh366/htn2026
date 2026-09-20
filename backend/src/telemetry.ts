@@ -36,6 +36,7 @@ export function setGame(gameId: string, roundId?: string | null, boot?: string):
 
 /** No free-form request paths, SQL, exception values, or payload-derived context leave the worker. */
 export function scrubEvent<T extends Sentry.Event>(event: T): T {
+  if (event.sdkProcessingMetadata) delete event.sdkProcessingMetadata.dynamicSamplingContext;
   delete event.request; delete event.user; delete event.extra; delete event.breadcrumbs; delete event.logentry;
   if (event.message) event.message = "Backend failure";
   event.tags = safeAttributes(event.tags ?? {});
@@ -65,6 +66,8 @@ function safeSpanName(value: string): string {
 
 export function sentryOptions(env: Env): Sentry.CloudflareOptions {
   const sample = Number(env.SENTRY_TRACES_SAMPLE_RATE);
+  // Options are per Worker invocation / DO instance, never shared global request state.
+  let errorWindow = 0, errorCount = 0;
   return {
     dsn: env.SENTRY_DSN || undefined, enabled: Boolean(env.SENTRY_DSN),
     environment: env.SENTRY_ENVIRONMENT || "production", release: env.SENTRY_RELEASE || undefined,
@@ -74,7 +77,13 @@ export function sentryOptions(env: Env): Sentry.CloudflareOptions {
       databaseQueryData: false, stackFrameVariables: false, frameContextLines: 0, graphQL: { document: false, variables: false }, genAI: { inputs: false, outputs: false } },
     maxBreadcrumbs: 0, sendClientReports: false, transportOptions: { bufferSize: 8 },
     enableRpcTracePropagation: true, rpcTracePropagationBindings: ["GAME_ROOM"],
-    beforeSend: (event, hint) => hint.originalException instanceof Error && hint.originalException.name === "GatewayError" ? null : scrubEvent(event),
+    beforeSend: (event, hint) => {
+      if (hint.originalException instanceof Error && hint.originalException.name === "GatewayError") return null;
+      const window = Math.floor(Date.now() / 60_000);
+      if (window !== errorWindow) { errorWindow = window; errorCount = 0; }
+      if (++errorCount > 10) return null;
+      return scrubEvent(event);
+    },
     beforeSendTransaction: scrubEvent,
     beforeSendLog: log => LOG_NAMES.has(String(log.message) as LogName) ? { ...log, attributes: safeAttributes(log.attributes) } : null,
   };
@@ -128,7 +137,8 @@ export class GameTelemetry {
       if ((row.diagnostic_at && now - row.diagnostic_at < 30_000) || (row.boot === boot && Number(input.seq) <= row.seq)) return;
       this.ctx.storage.sql.exec("UPDATE sentry_budget SET diagnostic_at=?,boot=?,seq=? WHERE id=1", now, boot!, input.seq as number);
       // Diagnostics have their own reserved budget; gameplay logs cannot starve health reports.
-      Sentry.logger.info("host.diagnostics", safeAttributes({ ...Sentry.getCurrentScope().getScopeData().tags, ...safeAttributes(input), source: "host" }));
+      const health = Object.fromEntries([...required, ...optional, "fw", "host_boot", "round_id"].map(key => [key, input[key]]));
+      Sentry.logger.info("host.diagnostics", safeAttributes({ ...Sentry.getCurrentScope().getScopeData().tags, ...health, source: "host" }));
     } catch { /* Best effort; never acknowledge, replay, or broadcast diagnostics. */ }
   }
 }
