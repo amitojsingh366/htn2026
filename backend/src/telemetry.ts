@@ -53,7 +53,14 @@ export function scrubEvent<T extends Sentry.Event>(event: T): T {
     }
   }
   if (event.transaction) event.transaction = safeSpanName(event.transaction);
-  event.spans = event.spans?.slice(0, 100).map(span => ({ ...span, description: safeSpanName(span.description ?? span.op ?? "operation"), data: safeAttributes(span.data) }));
+  if (event.spans) {
+    // SDK spans finish from the inside out; retain the gameplay parent spans
+    // even when an infection reconciliation produces many database children.
+    const important = event.spans.filter(span => span.op?.startsWith("game."));
+    const other = event.spans.filter(span => !span.op?.startsWith("game."));
+    event.spans = [...important, ...other].slice(0, 100).sort((a, b) => a.start_timestamp - b.start_timestamp)
+      .map(span => ({ ...span, description: safeSpanName(span.description ?? span.op ?? "operation"), data: safeAttributes(span.data) }));
+  }
   return event;
 }
 

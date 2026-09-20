@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GameTelemetry, Sentry, sentryOptions } from "../src/telemetry";
+import { GameTelemetry, Sentry, sentryOptions, scrubEvent } from "../src/telemetry";
 import { HostGateway } from "../src/gateway";
 
 const boot = "0123456789abcdef";
@@ -46,6 +46,17 @@ describe("Sentry telemetry safety", () => {
     expect(serialized).toContain("transaction");
     expect(serialized).toContain("exception");
     expect(serialized).toContain("01234567-89ab-cdef-0123-456789abcdef");
+  });
+
+  it("preserves important flow spans when a reconciliation exceeds the span budget", () => {
+    const base = { trace_id: "a".repeat(32), span_id: "b".repeat(16), start_timestamp: 1, timestamp: 2, data: {} };
+    const event = scrubEvent({ type: "transaction", transaction: "webSocketMessage", spans: [
+      ...Array.from({ length: 150 }, () => ({ ...base, op: "db.query", description: "PRIVATE_SQL", data: { name: "PRIVATE_NAME" } })),
+      { ...base, op: "game.infection.process", description: "game.infection.process" },
+    ] } satisfies Sentry.Event);
+    expect(event.spans).toHaveLength(100);
+    expect(event.spans?.some(span => span.description === "game.infection.process")).toBe(true);
+    expect(JSON.stringify(event)).not.toContain("PRIVATE_");
   });
 
   it("bounds game logs durably and reserves an independent diagnostics budget", async () => {
