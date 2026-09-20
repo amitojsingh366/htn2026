@@ -113,9 +113,20 @@ class GameRoomBase extends DurableObject<Env> {
 
   async getDirectorStatus(gameId: string): Promise<DirectorStatus> {
     if (gameId !== this.env.DIRECTOR_GAME_ID) return { ...initialDirectorState(),
-      reason: "Director is disabled for this game.", enabled: false, configured: Boolean(this.env.OPENAI_API_KEY), limits: limits(this.env) };
+      reason: "Director is disabled for this game.", enabled: false, operatorEnabled: false, serverEnabled: false,
+      configured: Boolean(this.env.OPENAI_API_KEY?.trim()), limits: limits(this.env) };
     const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
     return agent.getStatus();
+  }
+
+  async setDirectorEnabled(gameId: string, enabled: boolean): Promise<DirectorStatus> {
+    if (gameId !== this.env.DIRECTOR_GAME_ID || typeof enabled !== "boolean")
+      throw new GatewayError("INVALID_PAYLOAD", "Director controls are unavailable for this game", 400);
+    const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
+    // An untouched lobby has no gateway game identity until its first host
+    // registration; the routed, allowlisted room still owns the control.
+    const observation = this.getDirectorObservation();
+    return agent.setEnabled(enabled, { ...observation, gameId });
   }
 
   calculateRankings(): PlayerRanking[] {

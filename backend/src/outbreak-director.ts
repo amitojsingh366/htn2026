@@ -6,8 +6,8 @@ import type { DirectorAction, DirectorObservation, DirectorRun, DirectorState, D
 import { cleanAnnouncement, groundedRecap, initialDirectorState, limits, MAX_HISTORY, MAX_REQUESTS_PER_RUN, meaningfulChange, observationKey } from './director-policy';
 import { DIRECTOR_INSTRUCTIONS, DIRECTOR_TOOLS } from './director-tools';
 
-type Wake = { roundId: string; dueAt: number };
-type FollowUp = { id: string; roundId: string; reason: string };
+type Wake = { roundId: string; dueAt: number; controlRevision?: number };
+type FollowUp = { id: string; roundId: string; reason: string; controlRevision?: number };
 const MAX_RUN_MS = 90_000;
 class StaleRun extends Error {}
 
@@ -32,8 +32,14 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     if (this.state.pending) await this.scheduleWake();
   }
 
-  private enabled(): boolean { return this.env.DIRECTOR_ENABLED === 'true'; }
+  private operatorEnabled(): boolean { return this.state.operatorEnabled !== false; }
+  private enabled(): boolean { return this.env.DIRECTOR_ENABLED === 'true' && this.operatorEnabled(); }
   private configured(): boolean { return Boolean(this.env.OPENAI_API_KEY?.trim()); }
+  private disabledReason(): string {
+    return this.env.DIRECTOR_ENABLED !== 'true' ? 'Director is disabled by server configuration.'
+      : !this.operatorEnabled() ? 'Director is disabled from the dashboard.'
+      : 'OPENAI_API_KEY is not configured on the Worker.';
+  }
   private model(): string { return this.env.OPENAI_MODEL?.trim().slice(0, 100) || 'gpt-4.1-mini'; }
   private room(observation = this.state.latest) {
     if (!observation) throw new Error('No game observation.');
@@ -50,9 +56,38 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
         this.updateAction(action.id, { ...result });
       } catch { /* Keep the last known transport result when the game is unavailable. */ }
     }
-    return { ...this.state, model: this.model(), enabled: this.enabled(), configured: this.configured(), limits: limits(this.env),
-      ...(!this.enabled() || !this.configured() ? { status: 'disabled' as const,
-        reason: !this.enabled() ? 'Director is disabled.' : 'OPENAI_API_KEY is not configured on the Worker.' } : {}) };
+    const enabled = this.enabled(), configured = this.configured();
+    return { ...this.state, model: this.model(), enabled, configured, operatorEnabled: this.operatorEnabled(),
+      serverEnabled: this.env.DIRECTOR_ENABLED === 'true', limits: limits(this.env),
+      ...(!enabled || !configured ? { status: 'disabled' as const,
+        reason: this.disabledReason() }
+        : this.state.status === 'disabled' ? { status: 'idle' as const,
+          reason: this.state.latest?.roundId ? 'Waiting for meaningful game events.' : 'Waiting for a prepared live badge round.' } : {}) };
+  }
+
+  /** The preference commits before cancellation or refresh can yield to another RPC. */
+  async setEnabled(enabled: boolean, observation: DirectorObservation): Promise<DirectorStatus> {
+    if (typeof enabled !== 'boolean' || observation.gameId !== this.env.DIRECTOR_GAME_ID)
+      throw new Error('Invalid director control.');
+    if (enabled === this.operatorEnabled()) return this.getStatus();
+    const controlRevision = (this.state.controlRevision ?? 0) + 1;
+    const obsolete = [this.state.pending?.scheduleId, ...this.state.followUps.map(follow => follow.id)]
+      .filter((id): id is string => Boolean(id));
+    const interruptedRun = this.state.activeRun?.id;
+    this.setState({ ...this.state, operatorEnabled: enabled, controlRevision,
+      pending: null, followUps: [], activeRun: null,
+      status: enabled ? 'idle' : 'disabled',
+      reason: enabled ? 'Waiting for a prepared live badge round.' : 'Director is disabled from the dashboard.',
+      runs: this.state.runs.map(run => run.id === interruptedRun ? { ...run, status: 'stale', summary: 'Director disabled; unfinished actions discarded.' } : run) });
+    // A callback delivered during cancellation also checks the persisted setting
+    // and generation, so an old wake cannot restart work after a quick re-enable.
+    await Promise.allSettled(obsolete.map(id => this.cancelSchedule(id)));
+    if (this.state.controlRevision !== controlRevision || !this.enabled() || !this.configured()) return this.getStatus();
+    await this.observe(observation);
+    if (this.state.controlRevision === controlRevision && this.enabled() && this.configured() &&
+      this.state.latest?.roundId && !this.state.pending && !this.state.activeRun)
+      await this.enqueue('director_enabled', this.state.latest.roundId);
+    return this.getStatus();
   }
 
   async observe(observation: DirectorObservation): Promise<void> {
@@ -71,7 +106,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     if (oldWake) await this.cancelSchedule(oldWake);
     for (const follow of oldFollowUps) await this.cancelSchedule(follow.id);
     if (!this.enabled() || !this.configured()) {
-      this.setState({ ...this.state, status: 'disabled', reason: !this.enabled() ? 'Director is disabled.' : 'OPENAI_API_KEY is not configured on the Worker.' });
+      this.setState({ ...this.state, status: 'disabled', reason: this.disabledReason() });
       return;
     }
     if (!observation.roundId) {
@@ -82,7 +117,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
   }
 
   private async enqueue(trigger: string, roundId: string): Promise<void> {
-    if (this.state.latest?.roundId !== roundId) return;
+    if (!this.enabled() || !this.configured() || this.state.latest?.roundId !== roundId) return;
     const oldWake = this.state.pending?.scheduleId;
     const dueAt = Math.max(Date.now() + 1000, this.state.lastRunAt + limits(this.env).cooldownMs,
       this.state.activeRun?.expiresAt ?? 0);
@@ -92,10 +127,12 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
   }
   private async scheduleWake(): Promise<void> {
     const pending = this.state.pending;
-    if (!pending) return;
+    const controlRevision = this.state.controlRevision ?? 0;
+    if (!pending || !this.enabled() || !this.configured()) return;
     const scheduled = await this.schedule(new Date(Math.ceil(Math.max(Date.now() + 100, pending.dueAt) / 1000) * 1000), 'wake',
-      { roundId: pending.roundId, dueAt: pending.dueAt }, { idempotent: true, retry: { maxAttempts: 1 } });
-    if (this.state.pending?.roundId !== pending.roundId || this.state.pending.dueAt !== pending.dueAt) {
+      { roundId: pending.roundId, dueAt: pending.dueAt, controlRevision }, { idempotent: true, retry: { maxAttempts: 1 } });
+    if (!this.enabled() || !this.configured() || (this.state.controlRevision ?? 0) !== controlRevision ||
+      this.state.pending?.roundId !== pending.roundId || this.state.pending.dueAt !== pending.dueAt) {
       await this.cancelSchedule(scheduled.id); return;
     }
     this.setState({ ...this.state, pending: { ...this.state.pending, scheduleId: scheduled.id } });
@@ -105,7 +142,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
   async wake(payload: Wake): Promise<void> {
     const pending = this.state.pending;
     if (!pending || pending.roundId !== payload.roundId || pending.dueAt !== payload.dueAt || this.state.latest?.roundId !== payload.roundId) return;
-    if (!this.enabled() || !this.configured()) return;
+    if (!this.enabled() || !this.configured() || (payload.controlRevision ?? 0) !== (this.state.controlRevision ?? 0)) return;
     if (this.state.activeRun && this.state.activeRun.expiresAt > Date.now()) return;
     await this.runTurn(pending.trigger, payload.roundId);
   }
@@ -114,13 +151,16 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     const saved = this.state.followUps.find(f => f.token === payload.id);
     if (!saved) return;
     this.setState({ ...this.state, followUps: this.state.followUps.filter(f => f.token !== payload.id) });
-    if (!this.enabled() || this.state.latest?.roundId !== payload.roundId) return;
+    const controlRevision = this.state.controlRevision ?? 0;
+    if (!this.enabled() || !this.configured() || (payload.controlRevision ?? 0) !== controlRevision || this.state.latest?.roundId !== payload.roundId) return;
     try {
       const fresh = await this.room().getDirectorObservation();
+      if ((this.state.controlRevision ?? 0) !== controlRevision) return;
       await this.observe(fresh);
       if (fresh.roundId === payload.roundId) await this.enqueue(`follow_up: ${payload.reason}`, payload.roundId);
     } catch {
-      this.setState({ ...this.state, status: 'degraded', reason: 'Game unavailable at follow-up; gameplay continues.' });
+      if ((this.state.controlRevision ?? 0) === controlRevision && this.enabled() && this.configured())
+        this.setState({ ...this.state, status: 'degraded', reason: 'Game unavailable at follow-up; gameplay continues.' });
     }
   }
 
@@ -139,7 +179,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     this.setState({ ...this.state, actions: this.state.actions.map(action => action.id === id ? { ...action, result: JSON.parse(JSON.stringify(result)) as Record<string, JsonValue> } : action) });
   }
   private assertCurrent(runId: string, snapshot: DirectorObservation): void {
-    if (this.state.activeRun?.id !== runId || Date.now() > this.state.activeRun.expiresAt ||
+    if (!this.enabled() || !this.configured() || this.state.activeRun?.id !== runId || Date.now() > this.state.activeRun.expiresAt ||
       this.state.latest?.roundId !== snapshot.roundId || this.state.latest.revision !== snapshot.revision) throw new StaleRun('Game changed during reasoning; actions discarded.');
   }
 
@@ -151,7 +191,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
       lastRunAt: now, status: 'thinking', reason: 'OpenAI is evaluating the current outbreak.', runs: [...this.state.runs, run].slice(-30) });
     try {
       const snapshot = await this.room().getDirectorObservation();
-      if (snapshot.roundId !== roundId || this.state.latest?.roundId !== roundId ||
+      if (!this.enabled() || !this.configured() || this.state.activeRun?.id !== id || snapshot.roundId !== roundId || this.state.latest?.roundId !== roundId ||
         this.state.latest.revision > snapshot.revision || this.state.latest.observedAt > snapshot.observedAt) throw new StaleRun('Game changed before reasoning.');
       // Freshness is checked again at every tool boundary and in the gateway.
       this.setState({ ...this.state, latest: snapshot });
@@ -197,10 +237,11 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
       const reason = stale ? error.message : error instanceof OpenAI.APIError ? `OpenAI request failed (${error.status ?? 'network'}); waiting for a new event.`
         : error instanceof OpenAI.APIConnectionError ? 'OpenAI connection unavailable; waiting for a new event.' : 'Director run failed safely; waiting for a new event.';
       this.updateRun(id, { status: stale ? 'stale' : 'failed', summary: reason });
-      this.setState({ ...this.state, status: stale ? 'waiting' : 'degraded', reason });
+      if (this.state.activeRun?.id === id) this.setState({ ...this.state, status: stale ? 'waiting' : 'degraded', reason });
     } finally {
-      if (this.state.activeRun?.id === id) this.setState({ ...this.state, activeRun: null });
-      if (this.state.pending) {
+      const ownsRun = this.state.activeRun?.id === id;
+      if (ownsRun) this.setState({ ...this.state, activeRun: null });
+      if (ownsRun && this.enabled() && this.configured() && this.state.pending) {
         this.setState({ ...this.state, pending: { ...this.state.pending, dueAt: Math.max(Date.now() + 1000, this.state.lastRunAt + limits(this.env).cooldownMs) } });
         await this.scheduleWake();
       }
@@ -239,7 +280,8 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
         if (typeof delay !== 'number' || !Number.isInteger(delay) || delay < 15 || delay > 120 || typeof args.reason !== 'string' || args.reason.length > 120) throw new Error('Invalid follow-up.');
         if (fresh.endedAt || this.state.followUps.length >= 2) throw new Error('Follow-up unavailable after round end or when queue is full.');
         const token = crypto.randomUUID();
-        const scheduled = await this.schedule(delay, 'followUp', { id: token, roundId: snapshot.roundId!, reason: args.reason }, { idempotent: true, retry: { maxAttempts: 1 } });
+        const scheduled = await this.schedule(delay, 'followUp', { id: token, roundId: snapshot.roundId!, reason: args.reason,
+          controlRevision: this.state.controlRevision ?? 0 }, { idempotent: true, retry: { maxAttempts: 1 } });
         try { this.assertCurrent(runId, snapshot); }
         catch (error) { await this.cancelSchedule(scheduled.id); throw error; }
         // The payload token and schedule cancellation ID are deliberately distinct.

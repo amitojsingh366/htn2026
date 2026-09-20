@@ -115,6 +115,31 @@ const handler = {
 
     if (request.method === "POST") {
       switch (route) {
+        case "/director/enabled": {
+          if (gameId !== env.DIRECTOR_GAME_ID) return json({ error: "Director controls are unavailable for this game" }, 404);
+          let body: unknown;
+          const reader = request.body?.getReader();
+          if (!reader) return json({ error: "Expected a JSON enabled setting" }, 400);
+          try {
+            const decoder = new TextDecoder();
+            let length = 0, text = "";
+            while (true) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              length += chunk.value.byteLength;
+              if (length > 256) { await reader.cancel(); return json({ error: "Director setting body is too large" }, 413); }
+              text += decoder.decode(chunk.value, { stream: true });
+            }
+            body = JSON.parse(text + decoder.decode());
+          } catch { return json({ error: "Invalid JSON body" }, 400); }
+          finally { reader.releaseLock(); }
+          if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 ||
+            typeof (body as { enabled?: unknown }).enabled !== "boolean")
+            return json({ error: "Expected only an enabled boolean" }, 400);
+          try { return json(await stub.setDirectorEnabled(gameId, (body as { enabled: boolean }).enabled)); }
+          catch (error) { reportFailure(error); return json({ error: "Unable to update director setting" }, 503); }
+        }
+
         case "/start-game":
         case "/game/start": {
           try { return json(await stub.startGame(gameId, correlation)); }

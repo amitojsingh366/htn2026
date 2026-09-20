@@ -31,6 +31,18 @@
 .director-warning { color: #edc778; }
 .director-config { padding: 16px 0 0; font: 11px/1.8 var(--mono); color: #b4a8c4; }
 .director-config code { color: #d7c3f2; }
+.director-control { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 14px; border: 1px solid var(--iron-lit); background: rgba(138, 92, 196, 0.05); }
+.director-control-label { font: 600 13px/1.6 var(--mono); }
+.director-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 9px; flex-shrink: 0; min-height: 44px; min-width: 132px; padding: 10px 12px; border: 1px solid #635275; border-radius: 3px; background: #16111e; color: var(--bone); font: 600 12px var(--mono); cursor: pointer; }
+.director-toggle:hover:not(:disabled) { background: #251a32; border-color: #bd9ce7; }
+.director-toggle:focus-visible { outline: 2px solid #bd9ce7; outline-offset: 4px; }
+.director-toggle:disabled { opacity: 0.6; cursor: not-allowed; }
+.director-toggle.is-enabled { border-color: #608b46; }
+.director-toggle-track { display: inline-flex; align-items: center; width: 30px; height: 18px; padding: 3px; border-radius: 12px; background: #61576b; box-sizing: border-box; }
+.director-toggle-track > span { display: block; width: 12px; height: 12px; border-radius: 50%; background: #fff; }
+.director-toggle.is-enabled .director-toggle-track { background: #5b873f; }
+.director-toggle.is-enabled .director-toggle-track > span { margin-left: 12px; }
+.director-toggle-error { margin: -6px 0 16px; color: #edc778; font: 12px/1.7 var(--mono); }
 
 .director-budgets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 8px; }
 .director-budgets > div { background: rgba(138, 92, 196, 0.06); border: 1px solid var(--iron); padding: 12px; }
@@ -70,5 +82,6 @@
   .director-panel { padding: 18px 16px; }
   .director-budgets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .director-config { display: grid; gap: 6px; }
+  .director-control { align-items: flex-start; flex-direction: column; }
   .director-recap { padding: 12px; }
 }

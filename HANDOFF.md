@@ -1,6 +1,7 @@
-# LIVEG012 integration — current work
+# LIVEG012 integration — main release
 
-All three requested branches are merged on main; see [the integrated release guide](docs/integrated-release.md).
+All three requested branches are merged on main. The Outbreak Director is enabled in
+production and now has a durable dashboard toggle; see [the integrated release guide](docs/integrated-release.md).
 The 2026-09-20 request explicitly authorizes validation, deployment and a new firmware build.
 Earlier no-test and pending-deployment notes below are historical. Hardware flashing remains with the user.
 

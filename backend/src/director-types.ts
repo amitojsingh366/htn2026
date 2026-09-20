@@ -70,6 +70,9 @@ export interface DirectorRun {
 }
 export interface DirectorState {
   version: 1;
+  /** Absent on state saved before the operator toggle; defaults to true. */
+  operatorEnabled?: boolean;
+  controlRevision?: number;
   status: 'disabled' | 'idle' | 'thinking' | 'waiting' | 'degraded' | 'budget_exhausted';
   reason: string;
   model: string;
@@ -86,6 +89,8 @@ export interface DirectorState {
   activeRun: { id: string; roundId: string; expiresAt: number } | null;
 }
 export interface DirectorStatus extends DirectorState {
+  operatorEnabled: boolean;
+  serverEnabled: boolean;
   enabled: boolean;
   configured: boolean;
   limits: { dailyRequests: number; roundRequests: number; outputTokens: number; cooldownMs: number };

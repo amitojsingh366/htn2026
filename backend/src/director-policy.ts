@@ -16,7 +16,7 @@ export function limits(env: Env) {
   };
 }
 export function initialDirectorState(): DirectorState {
-  return { version: 1, status: 'disabled', reason: 'Director is disabled.', model: '', latest: null,
+  return { version: 1, operatorEnabled: true, controlRevision: 0, status: 'disabled', reason: 'Director is disabled.', model: '', latest: null,
     observations: [], actions: [], recaps: [], runs: [], followUps: [],
     dailyUsage: { day: '', requests: 0, inputTokens: 0, outputTokens: 0 },
     roundRequests: 0, lastRunAt: 0, activeRun: null, pending: null };

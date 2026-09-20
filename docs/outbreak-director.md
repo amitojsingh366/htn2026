@@ -50,10 +50,19 @@ recap when final evidence arrives.
 
 The app exposes `GET /api/v1/games/{game_id}/director` for status, observations,
 tools/results, follow-ups, recaps, response/request IDs, and token counts. This
-endpoint cannot trigger a model run or execute a tool. The dashboard polls it
+read endpoint cannot trigger a model run or execute a tool. The dashboard polls it
 independently every five seconds and retains the last values with a stale-feed
-notice during errors. There is no public agent connection, state mutation,
-prompt, or tool-execution route.
+notice during errors. There is no public agent connection, arbitrary state
+mutation, prompt, or tool-execution route.
+
+The dashboard also offers an enable/disable toggle backed by
+`POST /api/v1/games/{game_id}/director/enabled` with `{ "enabled": true }` or
+`false`. This operator preference is durable and preserves history and budgets.
+Disable cancels pending wakes/follow-ups and invalidates in-flight reasoning;
+already accepted announcements retain their bounded expiry. Enable observes
+fresh canonical game state and resumes eligible work, without environment
+edits. The configured game allowlist, server master switch and API key checks
+still apply. This control follows the existing Start/Reset access model.
 
 ## Configuration
 
@@ -146,10 +155,8 @@ sh firmware/tests/run-announcement-tests.sh
 (cd backend && npx wrangler deploy --dry-run)
 ```
 
-The Worker test pool is pinned by the lockfile and currently uses a workerd
-runtime supporting compatibility dates through `2026-08-22`; its test-only date
-override is explicit in `vitest.config.ts`. Production retains `2026-09-19` and
-is separately checked with the installed Wrangler dry run and local boot. Tests
+The merged release uses the Sentry branch's newer `@cloudflare/vitest-plugin`,
+with the same `2026-09-19` compatibility date as production. Tests
 use a clearly synthetic API key and controlled responses, including persisted
 memory across actual Durable Object eviction, budgeting, SDK schedules, API
 failure, late results, and reset races.
@@ -163,11 +170,13 @@ existing private build headers. The application was 1,319,024 bytes, leaving
 unused `self_install` function in `app_main.c`.
 
 The new firmware must be installed on the host and receiving badges for the
-completed ANNOUNCE path. Installation, merging, and deployment remain operator
-tasks. Use the existing guarded badge workflow in [live-backend.md](live-backend.md),
+completed ANNOUNCE path. Physical badge installation remains an operator
+task. Use the existing guarded badge workflow in [live-backend.md](live-backend.md),
 not the generic full-flash commands printed by ESP-IDF.
 
-### Verified in this branch
+### Historical checks on the Outbreak branch
+
+The integrated release guide supersedes these pre-merge deployment and build records.
 
 - Backend: 42 tests across four suites passed; TypeScript passed. API requests
   were mocked and labelled with synthetic response/request IDs.

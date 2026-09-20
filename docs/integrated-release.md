@@ -31,9 +31,32 @@ are request/token limits, not a dollar cap. Provider credentials are never part
 of the dashboard or firmware. Sentry uses the existing public project DSNs;
 no Sentry auth token is needed unless optional source-map upload is wanted.
 
+Use the **Outbreak Director** toggle on the dashboard for normal enable/disable
+control. The preference is stored in the director's Durable Object, survives
+refreshes and redeploys, and does not reset its history or request budgets.
+Disabling clears pending wakes/follow-ups and prevents subsequent model calls
+and tool actions from in-flight reasoning. Already accepted badge announcements
+can finish delivery within their original short expiry. Enabling reads the
+current game and resumes eligible work within the same request limits.
+The environment setting remains an emergency master switch; normal dashboard
+operation requires no environment edits or redeployment. The toggle uses the
+same operator-access model as the existing Start/Reset controls.
+
 The existing GameRoom SQLite migration is retained. The additive
 `v2-outbreak-director` migration creates the director storage. Deployment does
 not require resetting the game. Build frontend assets before deploying the Worker.
+
+## Verification
+
+The integrated backend passes all 59 tests across seven suites, including durable
+toggle persistence, disable/re-enable races, schedules, request budgets, telemetry
+privacy and announcement guards. Backend typechecking, frontend lint, five
+frontend telemetry tests, and the production dashboard build pass. Both native
+firmware suites (announcement codec and diagnostic codec/service) pass, as does
+the ESP-IDF 5.5.3 firmware build. The final package is generated from clean main.
+Live verification uses health/status reads and the dashboard toggle; it does not
+reset or start a game. Actual provider calls and physical badge delivery remain
+part of the next live round.
 
 ## Firmware and flashing
 

@@ -1,4 +1,4 @@
-// Read-only JSON contract from backend/src/director-types.ts. Never contains a key.
+// JSON status contract from backend/src/director-types.ts. Never contains a key.
 export interface DirectorObservation {
   roomId: string;
   gameId: string;
@@ -34,6 +34,8 @@ export interface DirectorAction {
 export interface DirectorStatus {
   version: 1;
   enabled: boolean;
+  operatorEnabled: boolean;
+  serverEnabled: boolean;
   configured: boolean;
   status: 'disabled' | 'idle' | 'thinking' | 'waiting' | 'degraded' | 'budget_exhausted';
   reason: string;
