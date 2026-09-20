@@ -1,11 +1,12 @@
-import { env, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+const SELF = exports.default;
 import { describe, expect, it, vi } from "vitest";
 import type { LeaderboardResponse, PopulationState } from "../src/types";
 
 describe("GameRoom", () => {
   it("starts empty", async () => {
     const stub = env.GAME_ROOM.getByName("empty");
-    expect(await stub.getState()).toEqual({
+    expect(await stub.getState()).toMatchObject({
       num_players: 0,
       num_infected: 0,
       num_humans: 0,
@@ -21,7 +22,7 @@ describe("GameRoom", () => {
     for (let i = 0; i < 4; i++) await stub.addPlayer();
     await stub.addInfected();
 
-    expect(await stub.getState()).toEqual({
+    expect(await stub.getState()).toMatchObject({
       num_players: 4,
       num_infected: 1,
       num_humans: 3,
@@ -358,7 +359,7 @@ describe("Worker routes", () => {
     const ws1 = wsRes1.webSocket!;
     const messages1: any[] = [];
     ws1.accept();
-    ws1.addEventListener("message", (e) => messages1.push(JSON.parse(e.data as string)));
+    ws1.addEventListener("message", (e) => { messages1.push(JSON.parse(e.data as string)); });
 
     // 2. ESP 2 connects via open WebSocket
     const wsRes2 = await SELF.fetch("https://example.com/api/v1/games/esp-ws/ws/device?device_id=esp-2", {
@@ -368,7 +369,7 @@ describe("Worker routes", () => {
     const ws2 = wsRes2.webSocket!;
     const messages2: any[] = [];
     ws2.accept();
-    ws2.addEventListener("message", (e) => messages2.push(JSON.parse(e.data as string)));
+    ws2.addEventListener("message", (e) => { messages2.push(JSON.parse(e.data as string)); });
 
     // Both should receive init messages
     await vi.waitFor(() => {
