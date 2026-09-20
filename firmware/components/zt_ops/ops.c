@@ -311,7 +311,7 @@ static void info_reply(void)
     const char *admission = admission_name(snapshot.admission);
     if (!admission || memcmp(snapshot.self_mac.bytes, physical.bytes, ZT_MAC_BYTES) ||
         (snapshot.role != ZT_ROLE_HUMAN && snapshot.role != ZT_ROLE_ZOMBIE && snapshot.role != ZT_ROLE_UNKNOWN) ||
-        (unsigned)snapshot.last_error > ZT_ERR_NETWORK) {
+        (unsigned)snapshot.last_error > ZT_ERR_MAX) {
         fail(ZT_ERR_INVALID_STATE); return;
     }
     r = read_config_status();

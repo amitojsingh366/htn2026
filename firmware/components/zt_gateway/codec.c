@@ -717,6 +717,36 @@ zt_err_t zt_gateway_decode_control(const char *json, size_t len, zt_json_workspa
     return d.error;
 }
 
+zt_err_t zt_gateway_decode_control_rejection(const char *json, size_t len, zt_json_workspace_t *workspace,
+    const zt_gateway_control_request_t *request, zt_err_t *reason)
+{
+    if (!request || !reason || !request->request_id ||
+        (request->action != ZT_HOST_CONTROL_START && request->action != ZT_HOST_CONTROL_RESET)) return ZT_ERR_INVALID_ARG;
+    *reason = ZT_ERR_CONFLICT;
+    decoder_t d;
+    zt_err_t err = begin_decode(json, len, workspace, &d);
+    if (err != ZT_OK) return err;
+    uint64_t version = uint_field(&d, 0, "v", UINT8_MAX);
+    if (d.error != ZT_OK) return d.error;
+    if (version != ZT_GATEWAY_SCHEMA_VERSION) return ZT_ERR_UNSUPPORTED_VERSION;
+    if (bool_field(&d, 0, "accepted")) d.error = ZT_ERR_PROTOCOL;
+    const char *action = request->action == ZT_HOST_CONTROL_START ? "start" : "reset";
+    if (!equal(&d, field(&d, 0, "action"), action) ||
+        id_value(&d, field(&d, 0, "request_id"), false) != request->request_id) d.error = ZT_ERR_PROTOCOL;
+    /* A rejection describes the server's current round, which may differ from
+     * the requested round. Validate its shape without treating it as state. */
+    (void)id_value(&d, field(&d, 0, "round_id"), true);
+    if (!uint_field(&d, 0, "state_rev", UINT32_MAX)) d.error = ZT_ERR_PROTOCOL;
+    int code = field(&d, 0, "code");
+    if (!kind(&d, code, J_STRING) || d.error != ZT_OK) return d.error;
+    if (equal(&d, code, "STALE_REGISTRATION") || equal(&d, code, "HOST_NOT_REGISTERED"))
+        *reason = ZT_ERR_HOST_REGISTRATION;
+    else if (equal(&d, code, "ROSTER_SIZE")) *reason = ZT_ERR_ROSTER_SIZE;
+    else if (equal(&d, code, "ROUND_ACTIVE")) *reason = ZT_ERR_ROUND_ACTIVE;
+    else if (equal(&d, code, "WRONG_ROUND")) *reason = ZT_ERR_STALE;
+    return ZT_OK;
+}
+
 typedef struct { char *out; size_t capacity, len; zt_err_t error; } writer_t;
 
 static void writef(writer_t *w, const char *format, ...)

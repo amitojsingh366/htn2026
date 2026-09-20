@@ -156,6 +156,11 @@ zt_err_t zt_gateway_control(const zt_gateway_control_request_t *control, zt_gate
         zt_id_format(control->request_id,key,sizeof(key)); zt_id_format(zt_gw->game,game,sizeof(game));
         snprintf(path,sizeof(path),"/api/v1/games/%s/gateway/control",game);
         result=request(path,body,key,true);
+        if (result==ZT_ERR_CONFLICT) {
+            zt_err_t reason;
+            if (zt_gateway_decode_control_rejection(zt_gw->rx.bytes,zt_gw->rx.message_len,
+                    &zt_gw->scratch.tokens,control,&reason)==ZT_OK) result=reason;
+        }
         if (result==ZT_OK) result=zt_gateway_decode_control(zt_gw->rx.bytes,zt_gw->rx.message_len,&zt_gw->scratch.tokens,out);
         if (result==ZT_OK && (out->action!=control->action || out->request_id!=control->request_id)) result=ZT_ERR_PROTOCOL;
     }

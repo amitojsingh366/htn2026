@@ -46,7 +46,7 @@ def decode_response(raw):
                 (type(v) is list and len(v) <= 20 and all(scalar(x) for x in v)))
                 for k, v in value.items()), "CONSOLE_RESPONSE_SHAPE_INVALID")
     if not value["ok"]:
-        require(type(value.get("error")) is int and 1 <= value["error"] <= 17,
+        require(type(value.get("error")) is int and 1 <= value["error"] <= 20,
                 "CONSOLE_RESPONSE_ERROR_INVALID")
     return value
 
