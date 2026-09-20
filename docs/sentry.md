@@ -213,9 +213,28 @@ durable gameplay evidence.
   host socket. Exactly one health log was emitted; rejects stayed silent and the
   next game clock exchange succeeded.
 
-No data was sent to a real Sentry project, and no firmware was flashed. Physical
-badge timing, reconnect behavior on a hotspot, and visibility in your Sentry
-account still require the staging demonstration above.
+The initial implementation checks used a local collector only. No firmware was
+flashed. Physical badge timing and reconnect behavior on a hotspot still require
+the staging demonstration above.
+
+## Production deployment — 2026-09-20
+
+After explicit authorization, commit `ef133bf` was deployed to
+`https://htn2026-backend.amitoj.workers.dev` with Cloudflare version
+`43d0e066-d129-4a0d-804a-e3769ffb9639`. Both supplied DSNs are configured with
+environment `production`, release `zombie-tag@9544527`, and 10% tracing. Session
+Replay and Application Metrics remain disabled. Existing `ZT_GATEWAY_TOKEN` and
+`ZT_HOST_MAC` secrets were preserved. This deployment did not merge the branch
+or flash any badges.
+
+Production checks returned HTTP 200 for health and population state. The empty
+lobby was unchanged across deployment. The live dashboard loaded without an
+unhandled browser error; Sentry accepted its session and structured-log
+envelopes with HTTP 200, and no Replay envelopes were sent. Backend trace
+delivery was exercised with a read-only sampled request, but ingestion in the
+backend Sentry project was not independently inspected. Updated host firmware
+must still be built with real provisioning and flashed before host-local
+diagnostic samples can arrive.
 
 ## References
 
