@@ -16,8 +16,8 @@ using the round and boot IDs, rather than keeping a span open for an entire game
 
 Use a browser project and a Cloudflare project in the same Sentry organization.
 Select both projects when looking for traces that cross the browser/backend
-boundary. You can also use one JavaScript project and distinguish the component
-attributes. Match the environment and release names across both applications.
+boundary. You can also use one JavaScript project and distinguish `component`
+and `source` attributes. Match the environment and release names across both applications.
 
 The integration is disabled when its DSN is absent. Never put a Sentry API/auth
 token in a `VITE_` variable or a firmware header. A DSN is the project's public
@@ -45,23 +45,37 @@ The committed examples contain placeholders only.
 For an operator-managed deployment, set `SENTRY_DSN` in the Worker variables and
 supply the frontend variables when building the static assets. If you prefer to
 store the DSN as a Worker secret, first remove the same-name entry from `vars`
-and use Wrangler's interactive secret command. Build the frontend before packaging the Worker because the
-Worker serves `frontend/dist`. Configuration changes do not deploy themselves.
+and use Wrangler's interactive secret command. Build the frontend before
+packaging the Worker because the Worker serves `frontend/dist`.
+Configuration changes do not deploy themselves.
 
 ```sh
 cd frontend
 npm ci
+npm run lint
+npm test
 npm run build
 cd ../backend
 npm ci
 npm run typecheck
 npm test
 npx wrangler deploy --dry-run --outdir /tmp/zombie-tag-worker
+cd ..
+sh firmware/tests/run_gateway_diagnostics.sh
 ```
 
 The dry run validates the bundle and does not deploy. The new application
 verification workflow also performs no deployment. Merge, deployment, firmware
 packaging, and flashing remain operator actions.
+
+Optional frontend source-map upload is supported at build time. Set
+`SENTRY_UPLOAD_SOURCEMAPS=true`, `SENTRY_ORG`, `SENTRY_PROJECT`,
+`SENTRY_AUTH_TOKEN`, and `VITE_SENTRY_RELEASE` in the private build environment.
+The build fails if an upload setting is missing, uploads hidden maps with the
+matching release, and deletes the maps after upload. Ordinary builds produce no
+public map files and perform no upload. Never expose the auth token to the
+browser. Backend errors retain bundled code locations; a separate backend
+source-map upload is optional and is not configured by this change.
 
 ## Demonstrating Replay, Tracing, and Logs
 
@@ -84,8 +98,8 @@ environment on both SDKs. Restore the normal rates after the demonstration.
    spans. Filter logs by the `round_id` to connect them to the earlier Start and
    later host health snapshots. Patient Zero and player names/MAC addresses are
    not telemetry attributes.
-4. Leave the welcomed host idle for at least a minute. In **Logs**, find the host
-   diagnostic event. Temporarily interrupt its network and reconnect it. A later
+4. Leave the welcomed host idle for at least a minute. In **Logs**, search for
+   `host.diagnostics` and `source:host`. Temporarily interrupt its network and reconnect it. A later
    snapshot shows cumulative connection/failure/drop counters, uptime, heap, and
    stack minima. Counters are retained across network reconnects during that
    boot; compare snapshots with the same `host_boot`. A reboot starts new counts.
@@ -106,6 +120,16 @@ and a transport drop count is not a count of lost durable infection events.
 Backend spans containing only synchronous CPU/SQLite work may have zero measured
 duration because the Workers clock advances around I/O.
 
+Useful names to search:
+
+| Feature | Names / attributes |
+| --- | --- |
+| Browser traces | `round.start`, `round.reset`, `state.sync.http`, `state.sync.websocket` |
+| Backend spans | `game.registration`, `game.round.prepare`, `game.round.start`, `game.infection.process`, `game.state.sync` |
+| Game logs | `game.registered`, `game.round_prepared`, `game.round_started`, `game.infections_processed`, `game.state_synced` |
+| Connection logs | Browser `feed.connected`, `feed.disconnected`, `feed.reconnecting`; backend `connection.opened`, `connection.closed`, `connection.send_failed` |
+| Correlation | `action_id` for an HTTP action; Sentry trace ID for its processing; `game_id`, `round_id`, `host_boot` for asynchronous host/game activity |
+
 ## Privacy and load controls
 
 Telemetry uses fixed event names and allowlisted scalar attributes. It excludes
@@ -115,16 +139,56 @@ Error stacks retain code locations for debugging. Replay masks text and inputs,
 blocks player regions/media, and excludes custom console/network recording
 events. An initial URL containing query/hash data disables recording.
 
-Logs and handled failures have fixed-memory budgets and cooldowns. Trace and
-Replay sampling are independent. SDK delivery is asynchronous; gameplay never
-waits for a Sentry network response. Worker/DO wrappers use the execution
-context to finish SDK delivery after handlers complete.
+Browser logs are capped at 30/minute with a 5-second per-event cooldown; handled
+failures have a 60-second cooldown and all browser errors share a 5/minute cap.
+Backend game logs share a durable 30/minute/game budget, with 10-second
+state/connection and 5-second rejection/failure cooldowns. Host diagnostics have
+an independent budget so routine game logs cannot crowd them out. Backend
+transport buffering is capped at eight envelopes and serialized traces at 100
+child spans. Error capture has a 10/minute/client budget (DO instance lifetime;
+the Worker creates its SDK client per invocation). Trace and Replay sampling are
+independent. SDK delivery is asynchronous; gameplay never waits for a Sentry
+network response. Worker/DO wrappers finish delivery through `waitUntil`.
 
 Diagnostic snapshots are optional, negotiated by the backend, and sent only on
-the welcomed host connection. Firmware uses existing buffers and sends after
-pending game work. Backend validation and rate limits apply independently of
-the firmware's send cadence. Invalid, excess, or unavailable diagnostics never
-become mesh traffic or durable gameplay evidence.
+the welcomed host connection. Firmware sends at most once per 60 seconds and
+uses at most 1,024 bytes, reusing existing buffers after pending game work. It
+checks socket writability without waiting, then uses a 20 ms timeout per SDK
+send operation (at most two 512-byte payload fragments). This is a bounded
+best-effort write on the gateway task, below game/radio task priority, rather
+than an asynchronous SDK send. It never retries a diagnostic or waits for an
+application acknowledgment. Congestion can lose a sample; cumulative counters
+remain for a later sample. Backend acceptance is limited to 1,536 bytes and one
+sample per 30 seconds per game, including across socket reconnects/DO hibernation.
+Invalid, excess, or unavailable diagnostics never become mesh traffic or
+durable gameplay evidence.
+
+## Verification performed
+
+- Frontend TypeScript/production build, ESLint, and five privacy/rate-limit tests.
+- Backend TypeScript and 21 tests in the current Cloudflare Workers test runtime,
+  including actual SDK envelope redaction, diagnostic authentication/validation,
+  no diagnostic reply/broadcast, persistent rate limiting, and game regression tests.
+- Wrangler deployment dry run: bundle validated at 827.98 KiB / 174.38 KiB gzip;
+  no deployment performed.
+- Native C codec and diagnostic scheduler tests, including truncation canaries,
+  negotiated compatibility, priority, congestion, pacing, and counter saturation.
+- Full ESP-IDF 5.5.3 ESP32-C3 build with dummy private configuration: image
+  `0x142190` bytes, 52% of the app partition free; one existing unused-function
+  warning. This was a compile check, not a deployable provisioned release.
+- Local browser + Worker + simulated host: registration, browser Start, readiness,
+  infection, and game-over state completed. The local collector received Replay,
+  errors, traces, and logs, with the same trace/action ID across browser, Worker,
+  Durable Object, and pushed state. Compressed Replay segments were decoded;
+  synthetic player names, MACs, credentials, error text, and injected query/baggage
+  values were absent from the outgoing data.
+- Valid, repeated, invalid, and oversized diagnostic frames used the same local
+  host socket. Exactly one health log was emitted; rejects stayed silent and the
+  next game clock exchange succeeded.
+
+No data was sent to a real Sentry project, and no firmware was flashed. Physical
+badge timing, reconnect behavior on a hotspot, and visibility in your Sentry
+account still require the staging demonstration above.
 
 ## References
 
