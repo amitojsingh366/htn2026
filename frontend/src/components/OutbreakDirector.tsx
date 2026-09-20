@@ -20,7 +20,9 @@ function JsonRecord({ value }: { value: Record<string, unknown> }) {
 
 function actionOutcome(action: DirectorAction) {
   const status = typeof action.result.status === 'string' ? action.result.status : 'Result recorded';
-  return status === 'queued' ? 'Queued · badge delivery unconfirmed' : label(status);
+  if (status !== 'queued') return label(status);
+  const acknowledgments = Array.isArray(action.result.acknowledged) ? action.result.acknowledged.length : 0;
+  return acknowledgments ? `Queued · ${acknowledgments} badge acknowledgments` : 'Queued · badge delivery unconfirmed';
 }
 
 function Observation({ value }: { value: DirectorObservation }) {
@@ -142,10 +144,11 @@ export function OutbreakDirector({ apiBaseUrl }: { apiBaseUrl: string }) {
 
         <div className="director-section">
           <h3>Recent actions</h3>
-          <p className="director-meta">A queued announcement awaits badge confirmation. Tool results record the outcome at execution time.</p>
+          <p className="director-meta">Queued announcements await badge confirmation. Receipts show badge acknowledgments when reported.</p>
           {actions.length ? <ol className="director-list">{actions.map(action => <li key={action.id}>
             <div className="director-row"><strong>{label(action.tool)}</strong><span className="director-outcome">{actionOutcome(action)}</span></div>
             {typeof action.arguments.text === 'string' && <p className="director-announcement">“{action.arguments.text}”</p>}
+            {typeof action.result.reason === 'string' && <p className="director-meta">{action.result.reason}</p>}
             <p className="director-meta"><Timestamp at={action.at} /></p>
             <details className="director-details">
               <summary>Tool arguments and result</summary>
