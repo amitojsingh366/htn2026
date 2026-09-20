@@ -20,6 +20,11 @@ server timestamp for dashboard clock alignment; readiness policy is unchanged.
 - Host reset preserves queued peer cleanup commands and allows later remote
   reset retries through the retired-round guard. Previously resetting the host
   first could leave the other badges in their old game.
+- A badge returning after the server cleanup window pulls the original RESET
+  using its old-round snapshot request. Authenticated, per-target rate-limited
+  repair retains the latest reset's exact target registration during this host
+  boot, protecting badges registered again. Stale lobby host registrations now
+  return to A: REGISTER without discarding an existing round.
 - A single scheduled start time drives the five-second countdown. Role displays
   remain visible; timers and tag controls wait for zero, including queued
   button presses and radio tag requests captured before the start.

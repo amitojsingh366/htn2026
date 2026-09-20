@@ -31,11 +31,20 @@ retries. RESET retains priority. Button errors distinguish missing host
 registration, too few registrations, an active round, a changed round and an
 unavailable server feature. Unsupported control endpoints stop automatic HTTP
 retries so they cannot keep interrupting live sync.
+A rejected stale lobby registration returns the host to A: REGISTER, and the
+next A creates a fresh registration identity. Existing rounds are preserved.
 
 The host retains queued peer RESET commands after its own local reset and
 continues forwarding archived cleanup for that round. Previously clearing the
 host also discarded those commands, and its stale-round guard rejected later
 retries before they could be relayed.
+If a badge misses the entire server cleanup window, its old-round snapshot
+request now receives the original authenticated RESET from the host's bounded
+cache. The exact target registration is retained so a stale request cannot clear
+a newly registered badge. Requests are authenticated and rate-limited per badge.
+This cache covers the latest reset during the same host boot and requires a
+working radio path on the game channel; older resets and host reboot are outside
+that retained window.
 
 The exact earlier B: RETRY rejection was not captured. A read-only endpoint
 check returned authenticated-route HTTP 401, and public state showed an empty
