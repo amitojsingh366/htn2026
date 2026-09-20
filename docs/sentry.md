@@ -58,13 +58,16 @@ ingestion address, not its management API credential.
   these files. No source-map auth token is required for errors, traces, or logs.
 - For local browser development, use ignored `frontend/.env.local`; ordinary
   `npm run dev` does not load `.env.production`. For local Worker development,
-  use ignored `backend/.dev.vars` with `SENTRY_DSN=""` to disable sending, or a
-  separate development DSN and `SENTRY_ENVIRONMENT="development"`. The Worker
-  otherwise inherits its production `vars`. Automated backend tests explicitly
-  override the DSN to empty, so tests never send to the production project.
+  override production Sentry variables at the command line:
+  `npm run dev -- --var 'SENTRY_DSN:' --var 'SENTRY_ENVIRONMENT:development' --var 'SENTRY_TRACES_SAMPLE_RATE:0'`.
+  The empty DSN disables sending. Use a development DSN/rate instead to opt in.
+  Wrangler's configured `secrets.required` restricts `.dev.vars` loading to the
+  gateway secrets, so additional Sentry values there would be ignored. Automated
+  backend tests explicitly override the DSN to empty, so tests never send to the
+  production project.
 
 Use the existing private provisioning for `ZT_GATEWAY_TOKEN` and `ZT_HOST_MAC`.
-No new badge credential is required. Keep local Worker values in ignored
+No new badge credential is required. Keep local Worker gateway credentials in ignored
 `backend/.dev.vars` and browser build values in ignored `frontend/.env.local`.
 The committed examples contain placeholders only.
 
