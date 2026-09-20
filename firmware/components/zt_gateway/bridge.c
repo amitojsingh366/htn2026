@@ -429,6 +429,25 @@ static uint64_t registration_key(const zt_game_feed_item_t *item)
     return h ? h : 1;
 }
 
+static bool start_waits_for_registration(void)
+{
+    gateway_t *g=zt_gw;
+    bool waiting=false;
+    portENTER_CRITICAL(&g->guard);
+    if (g->control.occupied && !g->control.answered && !g->control.delivered &&
+        g->control.request.action==ZT_HOST_CONTROL_START) {
+        for (unsigned i=0;i<GW_JOINS;++i) {
+            const gateway_join_t *join=&g->joins[i];
+            /* Let already queued registrations reach the server before Start
+             * freezes the roster. A completed response, radio delivery wait,
+             * or failed HTTP attempt must not hold the control indefinitely. */
+            if (join->occupied && !join->answered && !join->backoff) { waiting=true; break; }
+        }
+    }
+    portEXIT_CRITICAL(&g->guard);
+    return waiting;
+}
+
 static bool control_service(bool network,uint64_t now)
 {
     gateway_t *g=zt_gw;
@@ -731,7 +750,7 @@ zt_err_t zt_gateway_service(uint64_t now)
     if (g->rx.ready) return ZT_OK;
     /* Registration HTTPS closes the only WSS session. Let the bounded reset
      * cleanup finish before accepting registration work for the new lobby. */
-    if (!g->resetting && control_service(true,now)) return ZT_OK;
+    if (!g->resetting && !start_waits_for_registration() && control_service(true,now)) return ZT_OK;
     if (!g->resetting && joins_service(true,now)) return ZT_OK;
     if (!g->ws && now>=g->retry_us) {
         if (!g->bootstrapped) {

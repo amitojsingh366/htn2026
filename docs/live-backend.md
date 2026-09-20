@@ -21,6 +21,13 @@ prevent retries from operating on a later lobby or round. Reset is available onl
 after the server has ended that round; start still requires at least two saved
 registrations, including the host, and durable preparation by every player.
 
+Start first lets queued badge registrations make their initial server request,
+while the existing registration burst limit keeps live sync moving. Completed,
+rejected, or failed registration attempts and pending radio replies do not keep
+Start waiting. Reset keeps priority. A rejected button request now distinguishes
+too few registered badges, changed host registration, and an unfinished round;
+these server conditions previously shared a generic retry message.
+
 The matching backend must be deployed for either host button to work; flashing
 firmware alone does not install the `/gateway/control` route or server-side
 winner handling. An older server can return HTTP 426 because it routes the
