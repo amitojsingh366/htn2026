@@ -18,7 +18,7 @@ extern "C" {
 #define ZT_FIRMWARE_VERSION "0.2.0"
 #define ZT_BUILD_ID_LEN 8
 #ifndef ZT_BUILD_ID
-#define ZT_BUILD_ID "LIVEG010"
+#define ZT_BUILD_ID "LIVEG011"
 #endif
 /* Release tooling supplies exactly eight non-secret printable ASCII bytes. */
 typedef enum {
