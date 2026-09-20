@@ -624,8 +624,11 @@ static void accept_request(const input_t *in,uint64_t now)
     zt_wire_role_entry_t *role=self_role();
     if (!role) return;
     zt_clock_sample_t occurrence;
-    if (role->role==ZT_ROLE_ZOMBIE) result.result=ZT_TAG_ALREADY_ZOMBIE;
-    else if (!clock_running(now,&occurrence)) result.result=ZT_TAG_ROUND_INACTIVE;
+    /* A request queued before zero cannot become valid merely because its
+     * processing turn falls after the shared start deadline. */
+    if (!clock_running(now,&occurrence) || in->rx_us>now ||
+        now-in->rx_us>(uint64_t)occurrence.elapsed_ms*1000ULL) result.result=ZT_TAG_ROUND_INACTIVE;
+    else if (role->role==ZT_ROLE_ZOMBIE) result.result=ZT_TAG_ALREADY_ZOMBIE;
     else if (role->role!=ZT_ROLE_HUMAN || role->role_rev!=req.known_victim_role_rev) result.result=ZT_TAG_STALE_ACTOR;
     else {
         zt_peer_entry_t *peer=NULL;
@@ -1847,8 +1850,9 @@ static void peers_refresh(uint64_t now)
 static void attempt(uint64_t now)
 {
     zt_clock_sample_t c; zt_wire_role_entry_t *r=self_role();
+    if (!clock_running(now,&c)) return;
     if (!r || r->role!=ZT_ROLE_ZOMBIE) { feedback(ZT_FEEDBACK_STAY_CLEAR,now); return; }
-    if (!clock_running(now,&c) || cooldown_until>now || outbound.active || pending.id || r->cause_slot!=view.self_slot ||
+    if (cooldown_until>now || outbound.active || pending.id || r->cause_slot!=view.self_slot ||
         (!r->cause_seq && view.self_slot!=current.patient_zero_slot)) return;
     if (view.selected_target==ZT_SLOT_INVALID) { feedback(ZT_FEEDBACK_GET_CLOSER,now); return; }
     if (attempt_seq==UINT32_MAX || zt_mesh_get_boot_nonce(&boot_nonce)!=ZT_OK) { feedback(ZT_FEEDBACK_SYNC_REQUIRED,now); return; }

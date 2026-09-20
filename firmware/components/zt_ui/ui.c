@@ -170,7 +170,7 @@ zt_err_t zt_ui_post_button(const zt_button_edge_t *edge)
         ui.settings_open = false;
         break;
     case ZT_BUTTON_B:
-        if (ui.admission == ZT_ADMISSION_RUNNING) {
+        if (ui.admission == ZT_ADMISSION_RUNNING && ui.latest.countdown_ms <= 0) {
             ui.screen = ui.screen == ZT_SCREEN_PEER_LIST ? ZT_SCREEN_RUNNING_RADAR : ZT_SCREEN_PEER_LIST;
             ui.status_open = ui.settings_open = false;
         }
@@ -358,7 +358,7 @@ static zt_err_t leds(uint64_t now)
     uint64_t elapsed = now >= ui.feedback_at_us ? now - ui.feedback_at_us : 0;
     zt_role_t role = ui.latest.role;
     zt_range_tier_t closest = ZT_RANGE_UNKNOWN;
-    if (ui.latest.admission == ZT_ADMISSION_RUNNING) {
+    if (ui.latest.admission == ZT_ADMISSION_RUNNING && ui.latest.countdown_ms <= 0) {
         for (unsigned i = 0; i < ui.latest.direct_contact_count; ++i) {
             const zt_peer_entry_t *p = &ui.latest.contacts[i];
             uint64_t age = p->age_ms + (now > ui.latest.sampled_us ? (now-ui.latest.sampled_us)/1000 : 0);
@@ -413,8 +413,12 @@ static void prepare_frame(uint64_t now)
     if (ui.peer_offset > scroll_limit) ui.peer_offset = scroll_limit;
     ui.frame_peer_offset = ui.peer_offset;
     uint64_t elapsed_ms = now > ui.frame.sampled_us ? (now-ui.frame.sampled_us)/1000 : 0;
+    /* Scheduled RUNNING already carries assigned roles, but the round timer
+     * begins only after its shared countdown has elapsed. */
+    uint64_t countdown_ms = ui.frame.countdown_ms > 0 ? (uint32_t)ui.frame.countdown_ms : 0;
+    uint64_t playing_ms = elapsed_ms > countdown_ms ? elapsed_ms - countdown_ms : 0;
     if (ui.frame.admission == ZT_ADMISSION_RUNNING)
-        ui.frame.remaining_ms = elapsed_ms >= ui.frame.remaining_ms ? 0 : ui.frame.remaining_ms - elapsed_ms;
+        ui.frame.remaining_ms = playing_ms >= ui.frame.remaining_ms ? 0 : ui.frame.remaining_ms - playing_ms;
     if (ui.frame.remaining_ms > ZT_ROUND_DURATION_MS) ui.frame.remaining_ms = ZT_ROUND_DURATION_MS;
     if (ui.frame.countdown_ms > 0)
         ui.frame.countdown_ms = elapsed_ms >= (uint32_t)ui.frame.countdown_ms ? 0 : ui.frame.countdown_ms - elapsed_ms;

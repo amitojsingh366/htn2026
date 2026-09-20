@@ -203,6 +203,20 @@ static const char *host_control_detail(const zt_ui_snapshot_t *s)
     }
 }
 
+static void countdown(canvas_t *c, const zt_ui_snapshot_t *s)
+{
+    const char *role=role_name(s->role);
+    text(c,106,12,"YOUR ROLE",12,2,MUTED);
+    text(c,(ZT_LCD_WIDTH-(int)strlen(role)*24)/2,40,role,8,4,role_color(s->role));
+    text(c,76,86,"GAME STARTS IN",16,2,FG);
+    char seconds[16];
+    snprintf(seconds,sizeof(seconds),"%lu",(unsigned long)(((uint32_t)s->countdown_ms+999)/1000));
+    text(c,(ZT_LCD_WIDTH-(int)strlen(seconds)*48)/2,113,seconds,sizeof(seconds),8,YELLOW);
+    text(c,97,178,"TAGGING STARTS AT ZERO",24,1,MUTED);
+    links(c,s,12,194,1);
+    text(c,230,211,"START: STATUS",16,1,MUTED);
+}
+
 static void radar(canvas_t *c, const zt_ui_snapshot_t *s)
 {
     /* Exactly the left 160x180 area, with no directional axis or bearing marks. */
@@ -442,18 +456,21 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         break;
     }
     case ZT_SCREEN_PREPARED:
-        text(&c,12,12,"PREPARED",20,3,FG);
+        text(&c,12,12,"GET READY",20,3,FG);
         snprintf(value,sizeof(value),"READY %u / %u",s->ready_count,s->roster_count);
         text(&c,12,52,value,sizeof(value),2,GREEN);
-        snprintf(value,sizeof(value),"START IN %lu",(unsigned long)(s->countdown_ms > 0 ? ((uint32_t)s->countdown_ms+999)/1000 : 0));
-        text(&c,12,90,value,sizeof(value),3,YELLOW);
+        text(&c,12,90,"WAITING FOR BADGES",24,2,YELLOW);
         snprintf(value,sizeof(value),"CHANNEL %u",s->channel);
         text(&c,12,130,value,sizeof(value),2,MUTED);
-        text(&c,12,158,"WAIT FOR START",22,2,MUTED);
+        text(&c,12,158,"ROLES AFTER EVERYONE IS READY",36,1,MUTED);
         links(&c,s,12,184,1);
         break;
-    case ZT_SCREEN_RUNNING_RADAR: radar(&c,s); break;
-    case ZT_SCREEN_PEER_LIST: peers(&c,s,peer_offset); break;
+    case ZT_SCREEN_RUNNING_RADAR:
+        if (s->countdown_ms>0) countdown(&c,s); else radar(&c,s);
+        break;
+    case ZT_SCREEN_PEER_LIST:
+        if (s->countdown_ms>0) countdown(&c,s); else peers(&c,s,peer_offset);
+        break;
     case ZT_SCREEN_STATUS: status(&c,s,diagnostic_page,settings); break;
     case ZT_SCREEN_END:
         if (s->result_present && s->winner != ZT_ROLE_UNKNOWN) {
