@@ -192,6 +192,9 @@ static const char *host_control_detail(const zt_ui_snapshot_t *s)
     switch (s->host_control_error) {
     case ZT_ERR_NOT_IMPLEMENTED: case ZT_ERR_UNSUPPORTED_VERSION: return "ASK OPERATOR TO UPDATE SERVER";
     case ZT_ERR_AUTH: return "HOST AUTH ERROR";
+    case ZT_ERR_HOST_REGISTRATION: return "HOST REGISTRATION CHANGED";
+    case ZT_ERR_ROSTER_SIZE: return "REGISTER AT LEAST TWO BADGES";
+    case ZT_ERR_ROUND_ACTIVE: return "WAIT FOR THE ROUND TO FINISH";
     case ZT_ERR_INVALID_STATE: return "SERVER NOT READY";
     case ZT_ERR_CONFLICT: case ZT_ERR_STALE: return "ROUND CHANGED - SYNC AGAIN";
     case ZT_ERR_NOT_FOUND: return "SERVER CONTROL UNAVAILABLE";
