@@ -171,7 +171,7 @@ static struct { zt_game_feed_item_t item; uint64_t retry_us; bool submitted; } h
 static struct {
     zt_round_id_t round;
     zt_mac_t macs[ZT_MAX_PLAYERS];
-    uint32_t seq[ZT_MAX_PLAYERS], slots;
+    uint32_t seq[ZT_MAX_PLAYERS], slots, known_slots;
 } reset_delivery;
 static void reset_service(uint64_t now);
 
@@ -678,13 +678,39 @@ static void command_receipt(const zt_wire_command_receipt_t *receipt)
 static void reset_to_lobby(void)
 {
     zt_round_id_t round=reset_record.round_id;
+    bool host=is_host();
+    if (host) {
+        if (reset_delivery.round!=round) {
+            memset(&reset_delivery,0,sizeof(reset_delivery)); reset_delivery.round=round;
+        }
+        /* Legacy resets name a frozen slot without a registration/MAC pair.
+         * Keep only the routing identities needed for this round's cleanup. */
+        if (current.round_id==round) for (unsigned i=0;i<current.roster_count;++i) {
+            zt_slot_t target=current.roster[i].slot;
+            reset_delivery.macs[target]=current.roster[i].mac;
+            reset_delivery.known_slots|=1u<<target;
+        }
+    }
     portENTER_CRITICAL(&view_guard); published_registration_id=0; portEXIT_CRITICAL(&view_guard);
     memset(&current,0,sizeof(current)); memset(&staged,0,sizeof(staged)); memset(&assembly,0,sizeof(assembly));
     memset(&outbound,0,sizeof(outbound)); memset(outcomes,0,sizeof(outcomes)); memset(&host_snapshot,0,sizeof(host_snapshot));
     memset(decision_received,0,sizeof(decision_received)); memset(decision_relay,0,sizeof(decision_relay));
     if (previous_round.round==round) memset(&previous_round,0,sizeof(previous_round));
     portENTER_CRITICAL(&ingress_guard);
-    qhead=qcount=bhead=bcount=0; memset(commands,0,sizeof(commands)); memset(pages,0,sizeof(pages));
+    qhead=qcount=bhead=bcount=0;
+    for (unsigned i=0;i<ZT_PENDING_COMMAND_CAPACITY;++i) {
+        command_slot_t *slot=&commands[i];
+        const zt_wire_command_t *cmd=&slot->value.command;
+        bool remote_reset=host && slot->occupied && slot->server && slot->value.round_id==round &&
+            cmd->kind==ZT_CMD_RESET_GAME && cmd->target_slot<ZT_MAX_PLAYERS &&
+            ((cmd->args_len==14 && memcmp(cmd->args,view.self_mac.bytes,6)) ||
+             (!cmd->args_len && cmd->target_slot!=reset_record.slot));
+        /* The gateway already handed off these remote cleanup commands. The
+         * local reset clears ingress, so retain them ready for normal service. */
+        if (remote_reset) slot->occupied=2;
+        else memset(slot,0,sizeof(*slot));
+    }
+    memset(pages,0,sizeof(pages));
     portEXIT_CRITICAL(&ingress_guard);
     deferred_present=false;
     inventory_pages=0; inventory_round=0; event_retry_count=0; replay_cursor=previous_replay_cursor=0;
@@ -1105,7 +1131,6 @@ static bool process_command(unsigned ci,uint64_t now)
         reset_receipt_due=0;
         return true;
     }
-    if (msg->round_id==reset_record.round_id) return true;
     if (cmd->kind==ZT_CMD_RESET_GAME) {
         if (!msg->round_id || !cmd->command_seq || cmd->target_slot>=ZT_MAX_PLAYERS ||
             (cmd->args_len!=0 && cmd->args_len!=14)) return true;
@@ -1115,12 +1140,16 @@ static bool process_command(unsigned ci,uint64_t now)
             for (unsigned i=0;i<8;++i) target_registration|=(uint64_t)cmd->args[6+i]<<(8*i);
             if (!target_registration) return true;
         }
-        bool self=cmd->args_len ? mac_equal(&target_mac,&view.self_mac) : cmd->target_slot==view.self_slot;
+        bool retired_round=msg->round_id==reset_record.round_id;
+        bool self=cmd->args_len ? mac_equal(&target_mac,&view.self_mac) :
+            cmd->target_slot==(retired_round ? reset_record.slot : view.self_slot);
         if (is_host() && slot->server && !self) {
             if (!cmd->args_len) {
                 int index=roster_index(cmd->target_slot);
-                if (msg->round_id!=current.round_id || index<0) return true;
-                target_mac=current.roster[index].mac;
+                if (msg->round_id==current.round_id && index>=0) target_mac=current.roster[index].mac;
+                else if (retired_round && reset_delivery.round==msg->round_id &&
+                    (reset_delivery.known_slots&(1u<<cmd->target_slot))) target_mac=reset_delivery.macs[cmd->target_slot];
+                else return true;
             }
             /* The backend retries pending cleanup in bounded batches. Do not
              * occupy the eight gameplay command slots for an entire roster. */
@@ -1132,8 +1161,10 @@ static bool process_command(unsigned ci,uint64_t now)
             reset_delivery.macs[cmd->target_slot]=target_mac;
             reset_delivery.seq[cmd->target_slot]=cmd->command_seq;
             reset_delivery.slots|=1u<<cmd->target_slot;
+            reset_delivery.known_slots|=1u<<cmd->target_slot;
             return true;
         }
+        if (retired_round) return true; /* Only remote server cleanup crosses our reset. */
         if (!self || !join_nonce || !view.registered || cmd->target_slot!=view.self_slot ||
             (current.round_id && msg->round_id!=current.round_id) ||
             (cmd->args_len && target_registration!=registration_id())) return true;
@@ -1144,6 +1175,7 @@ static bool process_command(unsigned ci,uint64_t now)
         outbound.active=false;
         return true;
     }
+    if (msg->round_id==reset_record.round_id) return true;
     if (!join_nonce || !view.registered) return true;
     bool originate=is_host() && slot->server;
     if (originate) {
