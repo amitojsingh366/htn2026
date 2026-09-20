@@ -33,3 +33,13 @@ assert messages[0]["round_id"] == "ffffffffffffffff"
 assert messages[1]["round_id"] is None
 print("Gateway diagnostic codec: bounds, privacy allowlist, counters, capability compatibility passed")
 PY
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror \
+  -I "$task_root/firmware/tests/stubs" \
+  -I "$task_root/firmware/components/zt_contract/include" \
+  -I "$task_root/firmware/components/zt_gateway" \
+  "$task_root/firmware/tests/gateway_diagnostics_service.c" \
+  "$task_root/firmware/components/zt_gateway/diagnostics.c" \
+  "$task_root/firmware/components/zt_gateway/codec.c" \
+  "$task_root/firmware/components/zt_contract/ids.c" \
+  -o "$task_tmp/gateway-diagnostics-service"
+"$task_tmp/gateway-diagnostics-service"
