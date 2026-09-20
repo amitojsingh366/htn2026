@@ -37,9 +37,9 @@
     "nodejs_compat"
   ],
   "vars": {
-    "SENTRY_DSN": "",
+    "SENTRY_DSN": "https://df4a7292a5f027e5c521ae8cfd527dbf@o4512118072541184.ingest.us.sentry.io/4512118101966848",
     "SENTRY_ENVIRONMENT": "production",
-    "SENTRY_RELEASE": "",
+    "SENTRY_RELEASE": "zombie-tag@9544527",
     "SENTRY_TRACES_SAMPLE_RATE": "0.1"
   }
 }

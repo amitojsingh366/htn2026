@@ -43,6 +43,26 @@ ingestion address, not its management API credential.
 | Worker variable | `SENTRY_RELEASE` | Match the frontend release. |
 | Worker variable | `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling, default `0.1`. |
 
+### Where to edit this application's values
+
+- Browser production values are saved in [`frontend/.env.production`](../frontend/.env.production).
+  Vite loads these for `npm run build`; rebuild the website after editing them.
+- Backend production values are in the `vars` object of
+  [`backend/wrangler.jsonc`](../backend/wrangler.jsonc). They take effect when
+  you deploy the Worker.
+- Both now use the supplied project DSNs, `production`, release
+  `zombie-tag@9544527`, and trace sampling `0.1` (10%). Both browser Replay rates
+  are `0`; metrics are off. Update both release values together for a new release.
+- The browser DSN and these public settings are intentionally versioned so a
+  merge carries the configuration. Keep private auth/upload credentials out of
+  these files. No source-map auth token is required for errors, traces, or logs.
+- For local browser development, use ignored `frontend/.env.local`; ordinary
+  `npm run dev` does not load `.env.production`. For local Worker development,
+  use ignored `backend/.dev.vars` with `SENTRY_DSN=""` to disable sending, or a
+  separate development DSN and `SENTRY_ENVIRONMENT="development"`. The Worker
+  otherwise inherits its production `vars`. Automated backend tests explicitly
+  override the DSN to empty, so tests never send to the production project.
+
 Use the existing private provisioning for `ZT_GATEWAY_TOKEN` and `ZT_HOST_MAC`.
 No new badge credential is required. Keep local Worker values in ignored
 `backend/.dev.vars` and browser build values in ignored `frontend/.env.local`.
