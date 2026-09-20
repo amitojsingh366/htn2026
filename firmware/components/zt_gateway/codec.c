@@ -506,7 +506,7 @@ static void command_fields(decoder_t *d, int object, zt_gateway_command_t *c)
 
 static const char *const message_types[] = {
     "hello", "events", "ack", "need", "time_sync", "welcome", "receipts",
-    "decisions", "commands", "snapshot", "need_events", "time_sync_reply", "error"
+    "decisions", "commands", "snapshot", "need_events", "time_sync_reply", "error", "diagnostics"
 };
 
 zt_err_t zt_gateway_decode(const char *json, size_t len, zt_json_workspace_t *workspace, zt_gateway_message_t *out)
@@ -540,6 +540,12 @@ zt_err_t zt_gateway_decode(const char *json, size_t len, zt_json_workspace_t *wo
             if (workspace->tokens[resetting].type != J_TRUE && workspace->tokens[resetting].type != J_FALSE)
                 d.error = ZT_ERR_PROTOCOL;
             else w->resetting = workspace->tokens[resetting].type == J_TRUE;
+        }
+        int diagnostics = field(&d, 0, "diagnostics");
+        if (diagnostics >= 0) {
+            if (workspace->tokens[diagnostics].type != J_TRUE && workspace->tokens[diagnostics].type != J_FALSE)
+                d.error = ZT_ERR_PROTOCOL;
+            else w->diagnostics = workspace->tokens[diagnostics].type == J_TRUE;
         }
         if (!w->server_time_ms || (!w->round_id && w->phase != ZT_PHASE_LOBBY) ||
             (w->round_id && !w->resetting && (!w->snapshot_id || !w->snapshot_pages))) d.error = ZT_ERR_PROTOCOL;
@@ -904,7 +910,8 @@ zt_err_t zt_gateway_encode(const zt_gateway_message_t *message, char *out, size_
     if (!message->envelope.id) return ZT_ERR_INVALID_ARG;
     if (message->envelope.t != ZT_GATEWAY_HELLO && message->envelope.t != ZT_GATEWAY_EVENTS &&
         message->envelope.t != ZT_GATEWAY_ACK &&
-        message->envelope.t != ZT_GATEWAY_NEED && message->envelope.t != ZT_GATEWAY_TIME_SYNC)
+        message->envelope.t != ZT_GATEWAY_NEED && message->envelope.t != ZT_GATEWAY_TIME_SYNC &&
+        message->envelope.t != ZT_GATEWAY_DIAGNOSTICS)
         return ZT_ERR_NOT_IMPLEMENTED;
     writer_t w = {.out = out, .capacity = capacity, .error = ZT_OK};
     writef(&w, "{\"v\":1,\"t\":\"%s\",\"id\":%" PRIu32 ",\"ts\":%" PRIu64,
@@ -968,9 +975,38 @@ zt_err_t zt_gateway_encode(const zt_gateway_message_t *message, char *out, size_
     case ZT_GATEWAY_TIME_SYNC:
         writef(&w, ",\"nonce\":%" PRIu32, message->body.time_sync.nonce);
         break;
+    case ZT_GATEWAY_DIAGNOSTICS: {
+        const zt_gateway_diagnostics_t *d = &message->body.diagnostics;
+        if (!d->host_boot || !d->seq || d->uptime_ms > UINT64_C(9007199254740991) ||
+            (unsigned)d->last_error > ZT_ERR_NETWORK || d->fw[ZT_BUILD_ID_LEN]) {
+            w.error = ZT_ERR_INVALID_ARG;
+            break;
+        }
+        for (unsigned i = 0; i < ZT_BUILD_ID_LEN; ++i) {
+            char c = d->fw[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+                w.error = ZT_ERR_INVALID_ARG;
+        }
+        writef(&w, ",\"round_id\":"); write_id(&w, d->round_id, true);
+        writef(&w, ",\"host_boot\":"); write_id(&w, d->host_boot, false);
+        writef(&w, ",\"fw\":"); write_string(&w, d->fw, sizeof(d->fw), ZT_BUILD_ID_LEN);
+        writef(&w, ",\"seq\":%" PRIu32 ",\"uptime_ms\":%" PRIu64
+            ",\"reconnects\":%" PRIu32 ",\"failures\":%" PRIu32
+            ",\"dropped_messages\":%" PRIu32 ",\"send_failures\":%" PRIu32
+            ",\"heap_free_bytes\":%" PRIu32 ",\"heap_min_free_bytes\":%" PRIu32
+            ",\"heap_largest_free_bytes\":%" PRIu32 ",\"gateway_stack_free_bytes\":%" PRIu32
+            ",\"websocket_stack_free_bytes\":%" PRIu32 ",\"last_error\":%u",
+            d->seq, d->uptime_ms, d->reconnects, d->failures, d->dropped_messages, d->send_failures,
+            d->heap_free_bytes, d->heap_min_free_bytes, d->heap_largest_free_bytes,
+            d->gateway_stack_free_bytes, d->websocket_stack_free_bytes, (unsigned)d->last_error);
+        break;
+    }
     default:
         return ZT_ERR_NOT_IMPLEMENTED;
     }
     writef(&w, "}");
+    if (message->envelope.t == ZT_GATEWAY_DIAGNOSTICS && w.len > ZT_GATEWAY_DIAGNOSTICS_MAX_BYTES)
+        w.error = ZT_ERR_NO_SPACE;
     return end_write(&w, written);
 }
