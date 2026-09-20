@@ -1,4 +1,44 @@
-# LIVEG010 packaged — winner display, faster catch-up, and host buttons
+# LIVEG011 branch — nonblocking sync and shared demo countdown
+
+Current work is on `codex/firmware-sync-recovery`, based on main `62c4dab`, in
+`/Users/amitojsingh/Desktop/misc/hackerbadge/firmware-sync-recovery`.
+See `docs/firmware-sync-recovery.md` for behavior and rollout details.
+
+The user requested firmware fixes on a separate branch with frequent commits.
+They retained the server's all-registered-badges-ready requirement, then added
+a shared five-second demo countdown on frontend and badges, showing roles while
+gameplay is inactive. Backend changes are limited to the countdown schedule and
+server timestamp for dashboard clock alignment; readiness policy is unchanged.
+
+- Gateway command overflow no longer pins the live socket mailbox. Missing
+  targets receive three attempts over six seconds, then remain in the bounded
+  repair cache. Server replay preserves real host receipts without rearming
+  absent targets. Returning badges request state; lost repair requests retry.
+- START yields to queued registrations' first HTTP attempts. Rejected controls
+  display specific registration/roster/round reasons. Unsupported endpoints
+  stop automatic retries instead of repeatedly interrupting the live socket.
+- A single scheduled start time drives the five-second countdown. Role displays
+  remain visible; timers and tag controls wait for zero, including queued
+  button presses and radio tag requests captured before the start.
+- Firmware build ID is `LIVEG011`. Change `START_COUNTDOWN_MS` in
+  `backend/src/gateway.ts` from `5_000` to `60_000` for the full-game countdown.
+
+Live read-only evidence from this task supersedes the older deployment inference
+below: GET `/gateway/control` returns `401 {"v":1,"code":"UNAUTHORIZED"}`, and
+public population state is an empty lobby with no connected host. The route is
+recognized by the running backend. The exact earlier B: RETRY rejection was not
+captured; no live start/reset request was issued to reproduce it. Evidence files
+are ignored under `.orchestration/live-control-get.json` and `live-state.json`.
+
+No deployment, flashing, serial access, hardware tests, simulations or automated
+test suites were performed. Firmware compilation, backend typechecking and
+frontend production compilation validate source only. The prior unused
+`self_install` warning and four prior frontend lint errors remain. Keep private
+build headers and binary artifacts out of Git. Do not push integration history.
+
+---
+
+# Historical LIVEG010 packaged — winner display, faster catch-up, and host buttons
 
 ## Current checkpoint — 2026-09-20
 
