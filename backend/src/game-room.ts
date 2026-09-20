@@ -651,13 +651,14 @@ export class GameRoom extends DurableObject<Env> {
     code: number,
     reason: string,
   ): Promise<void> {
-    // 1006 is reserved and cannot be sent back to the peer.
+    // Missing close status and abnormal disconnect are runtime-only codes;
+    // neither may be sent back to the peer during host cleanup.
     const attachment = ws.deserializeAttachment() as { is_gateway?: boolean; welcomed?: boolean } | null;
     if (attachment?.is_gateway) {
       ws.serializeAttachment({ ...attachment, welcomed: false });
       this.broadcastState();
     }
-    ws.close(code === 1006 ? 1000 : code, reason);
+    ws.close(code === 1005 || code === 1006 ? 1000 : code, reason);
   }
 
   /** Persist first, then push: storage is written before this is called. */
