@@ -15,5 +15,8 @@
     "typescript": "~6.0.2",
     "vitest": "~3.2.0",
     "wrangler": "^4.101.0"
+  },
+  "dependencies": {
+    "@sentry/cloudflare": "^10.75.0"
   }
 }
