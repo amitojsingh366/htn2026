@@ -213,8 +213,9 @@ export class HostGateway {
     const m = this.get();
     const roster = m.roundId === row.round_id ? m.roster : this.archive(row.round_id)?.roster ?? [];
     const delivered = roster.length > 0 && roster.every(player => acknowledged.includes(player.slot));
-    return { ...result, acknowledged, reason: delivered ? "Applied by all rostered badges" :
-      Date.now() >= row.expires_at || m.roundId !== row.round_id || m.phase !== "running" ?
+    const expired = Date.now() >= row.expires_at || m.roundId !== row.round_id || m.phase !== "running";
+    return { ...result, status: delivered ? "applied" : expired ? "expired" : "queued", acknowledged, reason: delivered ? "Applied by all rostered badges" :
+      expired ?
         "Expired or round closed; no further delivery attempts" : "Queued; awaiting badge acknowledgements" };
   }
   /** The action identity and command commit together before any gateway send. */
@@ -239,6 +240,9 @@ export class HostGateway {
     else if (typeof request.text !== "string" || !request.text.trim() || request.text.length > 96 || /[^\x20-\x7e]|[<>`*_#\[\]{}]/.test(request.text)) reason = "Use 1 to 96 printable ASCII characters without markup";
     const recent = this.ctx.storage.sql.exec<AnnouncementRow>(
       "SELECT * FROM gateway_director_announcements WHERE round_id=? AND command_seq IS NOT NULL ORDER BY created_at DESC", m.roundId ?? "").toArray();
+    const normalizedText = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+    if (!reason && recent.some(row => normalizedText((JSON.parse(row.request) as AnnouncementRequest).text) === normalizedText(request.text)))
+      reason = "Announcement text already sent this round";
     if (!reason && recent.length && now - recent[0].created_at < DIRECTOR_ANNOUNCEMENT_INTERVAL_MS) reason = "Announcements require 15 seconds of spacing";
     if (!reason && recent.filter(row => {
       if (row.expires_at <= now) return false;

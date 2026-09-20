@@ -33,7 +33,7 @@ export interface AnnouncementRequest {
   expiresAt: number;
 }
 export interface AnnouncementResult {
-  status: 'queued' | 'duplicate' | 'rejected';
+  status: 'queued' | 'duplicate' | 'rejected' | 'applied' | 'expired';
   reason: string;
   commandSeq?: number;
   acknowledged?: number[];

@@ -72,7 +72,8 @@ describe("Director gateway integration", () => {
       await acknowledge(gateway, socket, 2, 0);
       expect(recovered.directorAnnouncementResult(request.actionId)).toMatchObject({ acknowledged: [0] });
       await acknowledge(gateway, socket, 2, 1, 2);
-      expect(recovered.directorAnnouncementResult(request.actionId)).toMatchObject({ acknowledged: [0, 1], reason: "Applied by all rostered badges" });
+      expect(recovered.directorAnnouncementResult(request.actionId)).toMatchObject({ status: "applied", acknowledged: [0, 1], reason: "Applied by all rostered badges" });
+      expect(recovered.sendDirectorAnnouncement(request).status).toBe("applied");
       expect(gateway.directorObservation("room").infected).toBe(1);
     });
   });
@@ -104,16 +105,16 @@ describe("Director gateway integration", () => {
   it("bounds outstanding announcements and preserves the command queue for gameplay", async () => {
     await withGateway("director-outbox", ({ gateway, state, request }) => {
       expect(gateway.sendDirectorAnnouncement(request).status).toBe("queued");
-      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "too-soon" }).reason).toContain("15 seconds");
+      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "too-soon", text: "Keep moving!" }).reason).toContain("15 seconds");
       for (let index = 2; index <= 3; index++) {
         state.storage.sql.exec("UPDATE gateway_director_announcements SET created_at=created_at-15001 WHERE command_seq IS NOT NULL");
-        expect(gateway.sendDirectorAnnouncement({ ...request, actionId: `queued:${index}` }).status).toBe("queued");
+        expect(gateway.sendDirectorAnnouncement({ ...request, actionId: `queued:${index}`, text: `Outbreak update ${index}` }).status).toBe("queued");
       }
       state.storage.sql.exec("UPDATE gateway_director_announcements SET created_at=created_at-15001 WHERE command_seq IS NOT NULL");
-      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "full" }).reason).toContain("queue is full");
+      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "full", text: "Watch for zombies!" }).reason).toContain("queue is full");
       // A completed badge broadcast frees one slot even before its TTL elapses.
       state.storage.sql.exec("UPDATE gateway_commands SET acknowledged='[0,1]' WHERE seq=2");
-      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "after-ack" }).status).toBe("queued");
+      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "after-ack", text: "Watch for zombies!" }).status).toBe("queued");
       expect(gateway.directorObservation("room")).toMatchObject({ revision: 7, infected: 1, humans: 1 });
     });
   });
@@ -145,6 +146,8 @@ describe("Director gateway integration", () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(messages.flatMap(message => (message.commands ?? []) as Array<{type:string}>).some(command => command.type === "ANNOUNCE")).toBe(false);
       expect(gateway.directorAnnouncementResult(request.actionId).reason).toContain("round closed");
+      expect(gateway.directorAnnouncementResult(request.actionId).status).toBe("expired");
+      expect(gateway.sendDirectorAnnouncement(request).status).toBe("expired");
       expect(now).toBeLessThan(request.expiresAt);
     });
   });
@@ -206,6 +209,32 @@ describe("Director gateway integration", () => {
       await director.cancelSchedule(status.pending!.scheduleId!);
       // Stop the fixture's normal WebSocket close from creating another hook.
       changeMeta(state, { gameId: GAME });
+    });
+  });
+
+  it("prevents different model runs from repeating an announcement within the same round", async () => {
+    await withGateway("director-text-duplicates", ({ gateway, state, request }) => {
+      expect(gateway.sendDirectorAnnouncement(request).status).toBe("queued");
+      state.storage.sql.exec("UPDATE gateway_director_announcements SET created_at=created_at-15001 WHERE command_seq IS NOT NULL");
+      state.storage.sql.exec("UPDATE gateway_commands SET acknowledged='[0,1]'");
+      expect(gateway.sendDirectorAnnouncement({ ...request, actionId: "new-run:new-call", text: `  ${request.text.toUpperCase()}  ` }))
+        .toMatchObject({ status: "rejected", reason: "Announcement text already sent this round" });
+      expect(gateway.sendDirectorAnnouncement(request).status).toBe("applied");
+      expect(state.storage.sql.exec<{count:number}>("SELECT COUNT(*) AS count FROM gateway_commands").one().count).toBe(1);
+    });
+  });
+
+  it("keeps host disconnect cleanup working if director observation construction fails", async () => {
+    await withGateway("director-observation-failure", async ({ instance, socket }) => {
+      const observation = vi.spyOn(instance, "getDirectorObservation").mockImplementation(() => { throw new Error("Unavailable observation"); });
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await expect(instance.webSocketClose(socket, 1000, "Offline")).resolves.toBeUndefined();
+        expect(observation).toHaveBeenCalled();
+        expect(warning).toHaveBeenCalledWith("Outbreak director observation unavailable");
+        expect(instance.getState()).toMatchObject({ host_connected: false });
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+      } finally { observation.mockRestore(); warning.mockRestore(); }
     });
   });
 });

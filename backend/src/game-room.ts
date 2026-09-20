@@ -684,13 +684,15 @@ export class GameRoom extends DurableObject<Env> {
     // Agent work is outside the gameplay response path and cannot reject a
     // durable infection receipt or prevent ordinary gateway replay.
     if (this.env.DIRECTOR_ENABLED === "true") {
-      const observation = this.getDirectorObservation();
-      if (observation.gameId === this.env.DIRECTOR_GAME_ID) {
-        this.ctx.waitUntil((async () => {
-          const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
-          await agent.observe(observation);
-        })().catch(() => { console.warn("Outbreak director notification unavailable"); }));
-      }
+      try {
+        const observation = this.getDirectorObservation();
+        if (observation.gameId === this.env.DIRECTOR_GAME_ID) {
+          this.ctx.waitUntil((async () => {
+            const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
+            await agent.observe(observation);
+          })().catch(() => { console.warn("Outbreak director notification unavailable"); }));
+        }
+      } catch { console.warn("Outbreak director observation unavailable"); }
     }
 
     return state;
