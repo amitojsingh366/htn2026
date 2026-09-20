@@ -134,7 +134,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
     const timeout = window.setTimeout(() => controller.abort(), 8000);
 
     try {
-      const { response: res, data: json } = await gameRequest<PopulationStateData>('state.sync', `${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
+      const { response: res, data: json, telemetry } = await gameRequest<PopulationStateData>('state.sync', `${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
       if (res.ok) {
         // An older HTTP request must not overwrite a more recent pushed state.
@@ -145,7 +145,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         const pct = json.survived_pct ?? (total > 0 ? (humans / total) * 100 : 0);
 
         const updated: PopulationStateData = {
-          round_id: json.round_id, telemetry: json.telemetry,
+          round_id: json.round_id, telemetry: json.telemetry ?? telemetry,
           num_players: total,
           num_infected: infected,
           num_humans: humans,

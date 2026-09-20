@@ -13,6 +13,11 @@ export interface StateTelemetry {
   round_id?: string;
   telemetry?: { sentry_trace?: string; action_id?: string; round_id?: string };
 }
+interface GameResponse<T> {
+  response: Response;
+  data: T;
+  telemetry: NonNullable<StateTelemetry['telemetry']>;
+}
 
 export function initializeTelemetry() {
   if (!enabled) return;
@@ -80,7 +85,7 @@ export function reportFailure(event: GameEvent, error: unknown, attributes: Reco
 }
 
 /** The action UUID and W3C-compatible Sentry trace travel only over HTTP. */
-export async function gameRequest<T>(operation: 'round.start' | 'round.reset' | 'state.sync', url: string, init?: RequestInit): Promise<{ response: Response; data: T }> {
+export async function gameRequest<T>(operation: 'round.start' | 'round.reset' | 'state.sync', url: string, init?: RequestInit): Promise<GameResponse<T>> {
   const actionId = crypto.randomUUID();
   return Sentry.startSpan({ name: operation === 'state.sync' ? 'state.sync.http' : operation, op: operation === 'state.sync' ? 'state.sync' : 'ui.action', attributes: { action_id: actionId, component: 'browser' } }, async span => {
     const attributes: Attributes = { action_id: actionId, operation, transport: 'http' };
@@ -97,7 +102,7 @@ export async function gameRequest<T>(operation: 'round.start' | 'round.reset' | 
       }
       const data = await response.json() as T;
       if (response.ok && operation !== 'state.sync') gameLog(`${operation}.completed`, { ...attributes, outcome: 'ok' });
-      return { response, data };
+      return { response, data, telemetry: { action_id: actionId, sentry_trace: Sentry.getTraceData()['sentry-trace'] } };
     } catch (error) {
       span.setStatus({ code: 2, message: 'network_error' });
       reportFailure(`${operation}.failed`, error, { ...attributes, outcome: 'network_error' });
@@ -111,7 +116,7 @@ export function traceStateUpdate<T>(state: StateTelemetry, transport: 'http' | '
   const attributes = safeAttributes({ transport, component: 'browser', action_id: state.telemetry?.action_id, round_id: state.round_id ?? state.telemetry?.round_id });
   const apply = () => Sentry.startSpan({ name: `state.sync.${transport}`, op: 'state.apply', attributes }, update);
   // Do not accept arbitrary baggage from state messages, only a validated trace.
-  return transport === 'websocket' && trace && /^[a-f0-9]{32}-[a-f0-9]{16}(?:-[01])?$/i.test(trace)
+  return trace && /^[a-f0-9]{32}-[a-f0-9]{16}(?:-[01])?$/i.test(trace)
     ? Sentry.continueTrace({ sentryTrace: trace, baggage: undefined }, apply)
     : apply();
 }
