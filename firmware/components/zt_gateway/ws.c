@@ -17,7 +17,7 @@ void zt_gateway_ws_discard(zt_ws_reassembly_t *a)
 }
 static zt_err_t reject_chunk(zt_ws_reassembly_t *a, zt_err_t error)
 {
-    ++a->dropped_messages;
+    gw_counter_increment(&a->dropped_messages);
     if (!a->ready) zt_gateway_ws_discard(a);
     return error;
 }
@@ -120,11 +120,14 @@ static void websocket_event(void *context,esp_event_base_t base,int32_t event,vo
     portENTER_CRITICAL(&g->guard);
     if (!g->status.websocket_stack_free_min || stack_free<g->status.websocket_stack_free_min)
         g->status.websocket_stack_free_min=stack_free;
-    if (event==WEBSOCKET_EVENT_CONNECTED) { g->status.connected=1; g->connected_event=1; g->status.last_inbound_us=esp_timer_get_time(); }
+    if (event==WEBSOCKET_EVENT_CONNECTED) {
+        g->status.connected=1; g->connected_event=1; g->status.last_inbound_us=esp_timer_get_time();
+        gw_counter_increment(&g->diagnostics_connections);
+    }
     else if (event==WEBSOCKET_EVENT_DISCONNECTED || event==WEBSOCKET_EVENT_CLOSED) {
         g->status.connected=0; g->status.welcomed=0; g->disconnected_event=1;
         if (event==WEBSOCKET_EVENT_CLOSED && e && e->close_status_code) g->close_code=e->close_status_code;
-        if (!g->rx.ready) { if (g->rx.message_in_progress) ++g->rx.dropped_messages; zt_gateway_ws_discard(&g->rx); }
+        if (!g->rx.ready) { if (g->rx.message_in_progress) gw_counter_increment(&g->rx.dropped_messages); zt_gateway_ws_discard(&g->rx); }
     } else if (event==WEBSOCKET_EVENT_DATA && e) {
         g->status.last_inbound_us=esp_timer_get_time();
         zt_ws_chunk_t chunk={e->payload_len,e->payload_offset,e->data_len,e->fin,e->op_code,(const uint8_t *)e->data_ptr};
@@ -140,7 +143,7 @@ static void websocket_event(void *context,esp_event_base_t base,int32_t event,vo
             /* A full mailbox is backpressure, not a broken TLS link. Drop the
              * entire extra message, including continuations, and let the
              * gateway's snapshot/command requests recover it. */
-            if (!g->rx_dropping_message) ++g->rx.dropped_messages;
+            if (!g->rx_dropping_message) gw_counter_increment(&g->rx.dropped_messages);
             g->rx_dropping_message=!(e->fin && e->payload_offset+e->data_len==e->payload_len);
         } else if (zt_gateway_ws_copy_chunk(&g->rx,&chunk)!=ZT_OK) g->overflow_event=1;
     } else if (event==WEBSOCKET_EVENT_ERROR && e) {
@@ -148,6 +151,7 @@ static void websocket_event(void *context,esp_event_base_t base,int32_t event,vo
         if (status>0) g->status.http_status=status;
         if (status==401 || status==403) { g->status.auth_error=1; g->stopped=1; }
         g->status.last_error=g->status.auth_error ? ZT_ERR_AUTH : ZT_ERR_NETWORK;
+        gw_record_failure_locked(g,g->status.last_error);
         g->disconnected_event=1;
     }
     portEXIT_CRITICAL(&g->guard);
@@ -166,7 +170,7 @@ void gw_ws_destroy(void)
     if (g->guard_transport) { esp_transport_destroy(g->guard_transport); g->guard_transport=NULL; }
     if (g->ssl) { esp_transport_destroy(g->ssl); g->ssl=NULL; }
     portENTER_CRITICAL(&g->guard);
-    g->status.connected=0; g->status.welcomed=0;
+    g->status.connected=0; g->status.welcomed=0; g->diagnostics_enabled=0;
     portEXIT_CRITICAL(&g->guard);
     g->hello_sent=0; g->response_pending=0; g->response_due=0; g->send_due=0;
     g->connected_event=0; g->disconnected_event=0; g->overflow_event=0;
@@ -216,9 +220,18 @@ failed:
 }
 zt_err_t zt_gateway_ws_send(const uint8_t *text,size_t len)
 {
+    return gw_ws_send_with_timeout(text,len,ZT_GATEWAY_SEND_TIMEOUT_MS);
+}
+zt_err_t gw_ws_send_with_timeout(const uint8_t *text,size_t len,uint32_t timeout_ms)
+{
     if (!zt_gw || !zt_gw->ws || !zt_gw->status.connected) return ZT_ERR_INVALID_STATE;
     if (!text || !len || len>ZT_GATEWAY_MESSAGE_MAX_BYTES) return ZT_ERR_INVALID_LENGTH;
-    return esp_websocket_client_send_text(zt_gw->ws,(const char *)text,len,pdMS_TO_TICKS(ZT_GATEWAY_SEND_TIMEOUT_MS))==(int)len ? ZT_OK : ZT_ERR_NETWORK;
+    if (esp_websocket_client_send_text(zt_gw->ws,(const char *)text,len,pdMS_TO_TICKS(timeout_ms))==(int)len) return ZT_OK;
+    portENTER_CRITICAL(&zt_gw->guard);
+    gw_counter_increment(&zt_gw->diagnostics_send_failures);
+    gw_record_failure_locked(zt_gw,ZT_ERR_NETWORK);
+    portEXIT_CRITICAL(&zt_gw->guard);
+    return ZT_ERR_NETWORK;
 }
 zt_err_t zt_gateway_ws_close(uint16_t code)
 {

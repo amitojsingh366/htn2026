@@ -54,6 +54,7 @@ typedef struct {
     uint8_t connected_event, disconnected_event, overflow_event, bootstrapped, hello_sent;
     uint8_t rx_dropping_message, ack_next, join_next, join_burst, events_first;
     uint8_t response_pending;
+    uint8_t diagnostics_enabled;
     uint8_t backoff, stopped, need_page, snapshot_pages, snapshot_mask, snapshot_request_pending;
     uint16_t close_code;
     uint32_t client_id, sync_nonce, snapshot_id;
@@ -61,6 +62,9 @@ typedef struct {
     uint64_t retry_us, hello_us, sync_us, sync_due, anchor_us, anchor_ms, start_ms, page_due;
     uint64_t http_retry_us, response_due, send_due, join_resume_us;
     uint32_t anchor_uncertainty_ms;
+    uint64_t diagnostics_due;
+    uint32_t diagnostics_seq, diagnostics_connections, diagnostics_failures, diagnostics_send_failures;
+    zt_err_t diagnostics_last_error;
     uint8_t header_done, header_first, header_protocol, header_overflow;
     uint16_t header_len;
     char header_line[128];
@@ -71,3 +75,15 @@ void gw_backoff(uint64_t now);
 void gw_anchor(uint64_t server_ms, uint64_t sent_us, uint64_t received_us);
 void gw_ws_release_rx(void);
 void gw_ws_destroy(void);
+zt_err_t gw_ws_send_with_timeout(const uint8_t *text, size_t len, uint32_t timeout_ms);
+void gw_diagnostics_service(uint64_t now);
+void gw_record_failure(zt_err_t error);
+/* Caller owns guard when counters can be touched from both gateway/WS tasks. */
+static inline void gw_counter_increment(uint32_t *counter)
+{ if (*counter < UINT32_MAX) ++*counter; }
+static inline void gw_record_failure_locked(gateway_t *g, zt_err_t error)
+{
+    if (error == ZT_OK) return;
+    gw_counter_increment(&g->diagnostics_failures);
+    g->diagnostics_last_error = error;
+}

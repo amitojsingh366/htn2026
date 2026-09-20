@@ -182,7 +182,8 @@ typedef struct { uint8_t count; zt_event_id_t events[ZT_GATEWAY_NEED_EVENTS_MAX]
 typedef struct { uint32_t nonce; } zt_gateway_time_sync_t;
 typedef struct { uint32_t nonce; uint64_t server_time_ms; } zt_gateway_time_sync_reply_t;
 /* Cumulative counters since gateway initialization, saturated at UINT32_MAX.
- * Reconnects counts scheduled reconnect/backoff attempts, failures counts local
+ * Reconnects counts successful WSS connections after the initial one, including
+ * registration/control's planned WSS replacement. Failures counts local
  * failed operations/transport errors (one incident may affect both). Memory is
  * internal 8-bit heap; stack low watermarks are ESP-IDF byte units. No payloads,
  * MACs, player names, credentials, arbitrary text, or mesh diagnostics. */
