@@ -27,6 +27,7 @@ export interface PopulationStateData {
   result_final?: boolean;
   result_complete?: boolean;
   started_at?: number | null;
+  server_time_ms?: number;
   patient_zero_id?: string | null;
   rankings?: Array<{
     rank: number;
@@ -53,8 +54,8 @@ export interface PopulationStateProps {
   infectedCount?: number;
   /** Optional CSS class name */
   className?: string;
-  /** Callback fired whenever state updates */
-  onUpdate?: (data: PopulationStateData) => void;
+  /** Callback fired whenever state updates, with an optional latency-adjusted server clock. */
+  onUpdate?: (data: PopulationStateData, estimatedServerTime?: number) => void;
   /** Whether the dashboard has a working connection to the backend. */
   onConnectionChange?: (connected: boolean) => void;
   /** Show live connection pulse indicator in header */
@@ -114,6 +115,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
     const sequence = updateSequenceRef.current;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8000);
+    const requestStartedAt = performance.now();
 
     try {
       const res = await fetch(`${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
@@ -136,6 +138,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           winner: json.winner, ended_at: json.ended_at,
           result_final: json.result_final, result_complete: json.result_complete,
           started_at: json.started_at,
+          server_time_ms: json.server_time_ms,
           patient_zero_id: json.patient_zero_id,
           rankings: json.rankings,
           gateway_mode: json.gateway_mode, gateway_phase: json.gateway_phase,
@@ -152,7 +155,9 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         updateSequenceRef.current++;
         setIsConnected(true);
         setError(null);
-        onUpdate?.(updated);
+        onUpdate?.(updated, typeof json.server_time_ms === 'number'
+          ? json.server_time_ms + (performance.now() - requestStartedAt) / 2
+          : undefined);
       }
     } catch (err: unknown) {
       if (sequence !== updateSequenceRef.current) return;
@@ -206,6 +211,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
               winner: rawData.winner, ended_at: rawData.ended_at,
               result_final: rawData.result_final, result_complete: rawData.result_complete,
               started_at: rawData.started_at,
+              server_time_ms: rawData.server_time_ms,
               patient_zero_id: rawData.patient_zero_id,
               rankings: rawData.rankings,
               gateway_mode: rawData.gateway_mode, gateway_phase: rawData.gateway_phase,

@@ -503,7 +503,7 @@ zt_err_t zt_console_reply(const zt_console_response_t *response)
     if (!parse(response->json, response->len, &object) || !number(&object, "id", UINT32_MAX, &id) || id != response->id) return ZT_ERR_INVALID_ARG;
     span_t ok = get(&object, "ok");
     if (response->result == ZT_OK) { if (!eq(ok, "true")) return ZT_ERR_INVALID_ARG; }
-    else if (!eq(ok, "false") || !number(&object, "error", ZT_ERR_NETWORK, &error) || error != response->result) return ZT_ERR_INVALID_ARG;
+    else if (!eq(ok, "false") || !number(&object, "error", ZT_ERR_MAX, &error) || error != response->result) return ZT_ERR_INVALID_ARG;
     if (xSemaphoreTake(tx_lock, 0) != pdTRUE) return ZT_ERR_BUSY;
     if (tx_len) { xSemaphoreGive(tx_lock); return ZT_ERR_BUSY; }
     portENTER_CRITICAL(&pending_guard);

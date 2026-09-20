@@ -182,10 +182,19 @@ static const char *host_connection_detail(const zt_ui_snapshot_t *s)
     if (error != ZT_OK) return "SERVER LINK ERROR";
     return "CONNECTING TO SERVER";
 }
+static bool host_control_needs_update(const zt_ui_snapshot_t *s)
+{
+    return s->host_control_error == ZT_ERR_NOT_IMPLEMENTED ||
+        s->host_control_error == ZT_ERR_UNSUPPORTED_VERSION;
+}
 static const char *host_control_detail(const zt_ui_snapshot_t *s)
 {
     switch (s->host_control_error) {
+    case ZT_ERR_NOT_IMPLEMENTED: case ZT_ERR_UNSUPPORTED_VERSION: return "ASK OPERATOR TO UPDATE SERVER";
     case ZT_ERR_AUTH: return "HOST AUTH ERROR";
+    case ZT_ERR_HOST_REGISTRATION: return "HOST REGISTRATION CHANGED";
+    case ZT_ERR_ROSTER_SIZE: return "REGISTER AT LEAST TWO BADGES";
+    case ZT_ERR_ROUND_ACTIVE: return "WAIT FOR THE ROUND TO FINISH";
     case ZT_ERR_INVALID_STATE: return "SERVER NOT READY";
     case ZT_ERR_CONFLICT: case ZT_ERR_STALE: return "ROUND CHANGED - SYNC AGAIN";
     case ZT_ERR_NOT_FOUND: return "SERVER CONTROL UNAVAILABLE";
@@ -195,6 +204,20 @@ static const char *host_control_detail(const zt_ui_snapshot_t *s)
     case ZT_ERR_BUSY: case ZT_ERR_NO_SPACE: return "SERVER BUSY";
     default: return "CONTROL REQUEST FAILED";
     }
+}
+
+static void countdown(canvas_t *c, const zt_ui_snapshot_t *s)
+{
+    const char *role=role_name(s->role);
+    text(c,106,12,"YOUR ROLE",12,2,MUTED);
+    text(c,(ZT_LCD_WIDTH-(int)strlen(role)*24)/2,40,role,8,4,role_color(s->role));
+    text(c,76,86,"GAME STARTS IN",16,2,FG);
+    char seconds[16];
+    snprintf(seconds,sizeof(seconds),"%lu",(unsigned long)(((uint32_t)s->countdown_ms+999)/1000));
+    text(c,(ZT_LCD_WIDTH-(int)strlen(seconds)*48)/2,113,seconds,sizeof(seconds),8,YELLOW);
+    text(c,97,178,"TAGGING STARTS AT ZERO",24,1,MUTED);
+    links(c,s,12,194,1);
+    text(c,230,211,"START: STATUS",16,1,MUTED);
 }
 
 static void radar(canvas_t *c, const zt_ui_snapshot_t *s)
@@ -413,6 +436,7 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         text(&c,12,12,"LOBBY",16,3,FG);
         text(&c,12,48,s->name,ZT_NAME_MAX_LEN,3,BLUE);
         const char *state = s->host_control_pending && s->host_control == ZT_HOST_CONTROL_START ? "STARTING GAME" :
+            s->host_control == ZT_HOST_CONTROL_START && host_control_needs_update(s) ? "SERVER UPDATE NEEDED" :
             s->host_control == ZT_HOST_CONTROL_START && s->host_control_error != ZT_OK ? "START FAILED - B: RETRY" :
             s->host_can_start ? "B: START GAME" :
             s->admission == ZT_ADMISSION_NEXT_ROUND ? "NEXT ROUND" :
@@ -435,18 +459,21 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         break;
     }
     case ZT_SCREEN_PREPARED:
-        text(&c,12,12,"PREPARED",20,3,FG);
+        text(&c,12,12,"GET READY",20,3,FG);
         snprintf(value,sizeof(value),"READY %u / %u",s->ready_count,s->roster_count);
         text(&c,12,52,value,sizeof(value),2,GREEN);
-        snprintf(value,sizeof(value),"START IN %lu",(unsigned long)(s->countdown_ms > 0 ? ((uint32_t)s->countdown_ms+999)/1000 : 0));
-        text(&c,12,90,value,sizeof(value),3,YELLOW);
+        text(&c,12,90,"WAITING FOR BADGES",24,2,YELLOW);
         snprintf(value,sizeof(value),"CHANNEL %u",s->channel);
         text(&c,12,130,value,sizeof(value),2,MUTED);
-        text(&c,12,158,"WAIT FOR START",22,2,MUTED);
+        text(&c,12,158,"ROLES AFTER EVERYONE IS READY",36,1,MUTED);
         links(&c,s,12,184,1);
         break;
-    case ZT_SCREEN_RUNNING_RADAR: radar(&c,s); break;
-    case ZT_SCREEN_PEER_LIST: peers(&c,s,peer_offset); break;
+    case ZT_SCREEN_RUNNING_RADAR:
+        if (s->countdown_ms>0) countdown(&c,s); else radar(&c,s);
+        break;
+    case ZT_SCREEN_PEER_LIST:
+        if (s->countdown_ms>0) countdown(&c,s); else peers(&c,s,peer_offset);
+        break;
     case ZT_SCREEN_STATUS: status(&c,s,diagnostic_page,settings); break;
     case ZT_SCREEN_END:
         if (s->result_present && s->winner != ZT_ROLE_UNKNOWN) {
@@ -466,7 +493,8 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         if (s->host_control_pending && s->host_control == ZT_HOST_CONTROL_RESET)
             text(&c,12,177,"RESETTING GAME",26,2,YELLOW);
         else if (s->host_can_reset)
-            text(&c,12,177,s->host_control_error != ZT_OK ? "RESET FAILED - B: RETRY" : "B: RESET GAME",26,2,YELLOW);
+            text(&c,12,177,host_control_needs_update(s) ? "SERVER UPDATE NEEDED" :
+                 s->host_control_error != ZT_OK ? "RESET FAILED - B: RETRY" : "B: RESET GAME",26,2,YELLOW);
         else if (!s->server_connected || s->pending_event_count || !s->result_final)
             text(&c,12,179,s->host_selected && s->host_configured ? "WAITING FOR SERVER TO SYNC" : "RECONNECT TO HOST TO SYNC",40,1,FG);
         else

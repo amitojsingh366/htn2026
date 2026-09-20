@@ -713,7 +713,7 @@ def demo(args, name, rid):
             badge_error = evidence.get("error")
     elif isinstance(response, dict) and response.get("ok") is False:
         badge_error = response.get("error")
-    if type(badge_error) is int and 1 <= badge_error <= 17:
+    if type(badge_error) is int and 1 <= badge_error <= 20:
         print(f"Badge refused the demo: error {badge_error}. No retry or resend.", file=sys.stderr)
     elif attempted:
         print("Demo outcome UNCERTAIN: no valid success/refusal acknowledgment was confirmed. "

@@ -83,7 +83,11 @@ static zt_err_t request(const char *path, const char *body, const char *key, boo
         g->stopped=1; return ZT_ERR_AUTH;
     }
     if (control && status==409) return ZT_ERR_CONFLICT;
-    if (control && status==404) return ZT_ERR_NOT_FOUND;
+    /* Older servers route an unknown gateway path to the WebSocket handler,
+     * which responds 426. These responses require a server update, not another
+     * HTTPS attempt that tears down a healthy live socket on every retry. */
+    if (control && (status==404 || status==405 || status==426 || status==501))
+        return ZT_ERR_NOT_IMPLEMENTED;
     /* Registration payload rejection belongs to that badge. It must not shut
      * down the shared gateway or prevent other queued badges registering. */
     if (body && (status==400 || status==422)) return ZT_ERR_INVALID_ARG;
@@ -152,6 +156,11 @@ zt_err_t zt_gateway_control(const zt_gateway_control_request_t *control, zt_gate
         zt_id_format(control->request_id,key,sizeof(key)); zt_id_format(zt_gw->game,game,sizeof(game));
         snprintf(path,sizeof(path),"/api/v1/games/%s/gateway/control",game);
         result=request(path,body,key,true);
+        if (result==ZT_ERR_CONFLICT) {
+            zt_err_t reason;
+            if (zt_gateway_decode_control_rejection(zt_gw->rx.bytes,zt_gw->rx.message_len,
+                    &zt_gw->scratch.tokens,control,&reason)==ZT_OK) result=reason;
+        }
         if (result==ZT_OK) result=zt_gateway_decode_control(zt_gw->rx.bytes,zt_gw->rx.message_len,&zt_gw->scratch.tokens,out);
         if (result==ZT_OK && (out->action!=control->action || out->request_id!=control->request_id)) result=ZT_ERR_PROTOCOL;
     }

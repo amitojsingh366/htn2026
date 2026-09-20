@@ -38,11 +38,12 @@ typedef struct { zt_host_control_t action; uint32_t request_seq; zt_err_t result
 /* The same eight slots cover ingress, persistence and host delivery. */
 typedef struct {
     zt_server_command_t value;
+    zt_wire_command_receipt_t local_receipt;
     uint64_t rx_us, deadline_us, retry_us[ZT_MAX_PLAYERS];
     uint32_t age_ms, targets;
-    uint8_t hops, occupied, server, first_broadcast, attempts[ZT_MAX_PLAYERS];
+    uint8_t hops, occupied, server, first_broadcast, receipt_pending, attempts[ZT_MAX_PLAYERS];
 } command_slot_t;
-enum { COMMAND_DELIVERING=3, COMMAND_PERSISTING=4, COMMAND_CACHED=5, HOST_COMMAND_ATTEMPTS=30 };
+enum { COMMAND_DELIVERING=3, COMMAND_PERSISTING=4, COMMAND_CACHED=5, HOST_COMMAND_ATTEMPTS=3 };
 typedef struct {
     uint8_t occupied, server;
     union { zt_domain_message_t radio; zt_server_snapshot_t snapshot; } value;
@@ -136,6 +137,7 @@ static uint32_t attempt_seq, join_nonce, join_generation, time_nonce;
 static zt_boot_nonce_t boot_nonce;
 static zt_mac_t time_peer;
 static uint64_t time_sent_us, cooldown_until, beacon_due, join_due, snapshot_due, close_due, replay_due, time_due, publish_due;
+static uint64_t snapshot_refresh_due;
 static uint64_t config_poll_due;
 static uint32_t driver_generation;
 static uint16_t replay_cursor;
@@ -169,7 +171,9 @@ static struct { zt_game_feed_item_t item; uint64_t retry_us; bool submitted; } h
 static struct {
     zt_round_id_t round;
     zt_mac_t macs[ZT_MAX_PLAYERS];
-    uint32_t seq[ZT_MAX_PLAYERS], slots;
+    uint64_t registration[ZT_MAX_PLAYERS], request_due[ZT_MAX_PLAYERS];
+    uint32_t valid_until[ZT_MAX_PLAYERS];
+    uint32_t seq[ZT_MAX_PLAYERS], slots, known_slots;
 } reset_delivery;
 static void reset_service(uint64_t now);
 
@@ -363,6 +367,13 @@ static zt_err_t post_command(const zt_server_command_t *v,uint64_t rx,uint32_t a
             (cmd->target_slot==ZT_SLOT_ALL || cmd->target_slot==view.self_slot));
         bool same=old->kind==cmd->kind && same_target && old->args_len==cmd->args_len &&
             old->valid_until_elapsed_ms==cmd->valid_until_elapsed_ms && args_same;
+        if (same && server && (commands[i].occupied==COMMAND_CACHED || commands[i].occupied==COMMAND_DELIVERING)) {
+            /* Backend replay must not restart delivery to an absent badge.
+             * Retain only this host's genuine receipt for reconnect replay;
+             * remote targets ask for catch-up when they can hear us again. */
+            if (commands[i].local_receipt.command_seq) commands[i].receipt_pending=1;
+            portEXIT_CRITICAL(&ingress_guard); return ZT_OK;
+        }
         if (!same || commands[i].occupied!=COMMAND_CACHED) {
             portEXIT_CRITICAL(&ingress_guard); return same ? ZT_OK : ZT_ERR_CONFLICT;
         }
@@ -615,8 +626,11 @@ static void accept_request(const input_t *in,uint64_t now)
     zt_wire_role_entry_t *role=self_role();
     if (!role) return;
     zt_clock_sample_t occurrence;
-    if (role->role==ZT_ROLE_ZOMBIE) result.result=ZT_TAG_ALREADY_ZOMBIE;
-    else if (!clock_running(now,&occurrence)) result.result=ZT_TAG_ROUND_INACTIVE;
+    /* A request queued before zero cannot become valid merely because its
+     * processing turn falls after the shared start deadline. */
+    if (!clock_running(now,&occurrence) || in->rx_us>now ||
+        now-in->rx_us>(uint64_t)occurrence.elapsed_ms*1000ULL) result.result=ZT_TAG_ROUND_INACTIVE;
+    else if (role->role==ZT_ROLE_ZOMBIE) result.result=ZT_TAG_ALREADY_ZOMBIE;
     else if (role->role!=ZT_ROLE_HUMAN || role->role_rev!=req.known_victim_role_rev) result.result=ZT_TAG_STALE_ACTOR;
     else {
         zt_peer_entry_t *peer=NULL;
@@ -648,25 +662,64 @@ static void accept_request(const input_t *in,uint64_t now)
 static void command_receipt(const zt_wire_command_receipt_t *receipt)
 {
     zt_wire_payload_t p={.command_receipt=*receipt}; send_payload(current.round_id,ZT_PKT_COMMAND_RECEIPT,&p,ZT_TX_PRIO_EVENT_CONTROL);
-    zt_game_feed_item_t f={.kind=ZT_GAME_FEED_COMMAND_RECEIPT,.round_id=current.round_id,.body.command_receipt=*receipt}; feed(&f);
+    zt_game_feed_item_t f={.kind=ZT_GAME_FEED_COMMAND_RECEIPT,.round_id=current.round_id,.body.command_receipt=*receipt};
+    zt_err_t result=feed(&f);
+    if (is_host() && receipt->slot==view.self_slot &&
+        (receipt->state==ZT_RECEIPT_APPLIED || receipt->state==ZT_RECEIPT_PREPARED_READY)) {
+        portENTER_CRITICAL(&ingress_guard);
+        for (unsigned i=0;i<ZT_PENDING_COMMAND_CAPACITY;++i) {
+            command_slot_t *slot=&commands[i];
+            if (!slot->occupied || !slot->server || slot->value.round_id!=current.round_id ||
+                slot->value.command.command_seq!=receipt->command_seq) continue;
+            slot->local_receipt=*receipt;
+            if (result!=ZT_OK) slot->receipt_pending=1;
+        }
+        portEXIT_CRITICAL(&ingress_guard);
+    }
 }
 static void reset_to_lobby(void)
 {
     zt_round_id_t round=reset_record.round_id;
+    bool host=is_host();
+    if (host) {
+        if (reset_delivery.round!=round) {
+            memset(&reset_delivery,0,sizeof(reset_delivery)); reset_delivery.round=round;
+        }
+        /* Legacy resets name a frozen slot without a registration/MAC pair.
+         * Keep only the routing identities needed for this round's cleanup. */
+        if (current.round_id==round) for (unsigned i=0;i<current.roster_count;++i) {
+            zt_slot_t target=current.roster[i].slot;
+            reset_delivery.macs[target]=current.roster[i].mac;
+            reset_delivery.known_slots|=1u<<target;
+        }
+    }
     portENTER_CRITICAL(&view_guard); published_registration_id=0; portEXIT_CRITICAL(&view_guard);
     memset(&current,0,sizeof(current)); memset(&staged,0,sizeof(staged)); memset(&assembly,0,sizeof(assembly));
     memset(&outbound,0,sizeof(outbound)); memset(outcomes,0,sizeof(outcomes)); memset(&host_snapshot,0,sizeof(host_snapshot));
     memset(decision_received,0,sizeof(decision_received)); memset(decision_relay,0,sizeof(decision_relay));
     if (previous_round.round==round) memset(&previous_round,0,sizeof(previous_round));
     portENTER_CRITICAL(&ingress_guard);
-    qhead=qcount=bhead=bcount=0; memset(commands,0,sizeof(commands)); memset(pages,0,sizeof(pages));
+    qhead=qcount=bhead=bcount=0;
+    for (unsigned i=0;i<ZT_PENDING_COMMAND_CAPACITY;++i) {
+        command_slot_t *slot=&commands[i];
+        const zt_wire_command_t *cmd=&slot->value.command;
+        bool remote_reset=host && slot->occupied && slot->server && slot->value.round_id==round &&
+            cmd->kind==ZT_CMD_RESET_GAME && cmd->target_slot<ZT_MAX_PLAYERS &&
+            ((cmd->args_len==14 && memcmp(cmd->args,view.self_mac.bytes,6)) ||
+             (!cmd->args_len && cmd->target_slot!=reset_record.slot));
+        /* The gateway already handed off these remote cleanup commands. The
+         * local reset clears ingress, so retain them ready for normal service. */
+        if (remote_reset) slot->occupied=2;
+        else memset(slot,0,sizeof(*slot));
+    }
+    memset(pages,0,sizeof(pages));
     portEXIT_CRITICAL(&ingress_guard);
     deferred_present=false;
     inventory_pages=0; inventory_round=0; event_retry_count=0; replay_cursor=previous_replay_cursor=0;
     rejoining=close_committed=checkpoint_dirty=false; join_nonce=0; join_due=time_sent_us=cooldown_until=0;
     round_end_elapsed_ms=ZT_ROUND_DURATION_MS;
     result_command_seq=0; result_authoritative=false;
-    beacon_due=host_metadata_due=snapshot_due=0;
+    beacon_due=host_metadata_due=snapshot_due=snapshot_refresh_due=0;
     gateway_boot=gateway_seen_us=0; gateway_serial=0;
     zt_game_clock_reset(); zt_game_peers_configure(config.game_id,NULL);
     view.round_id=0; view.self_slot=ZT_SLOT_INVALID; view.registered=view.roster_count=view.ready_count=0;
@@ -842,6 +895,9 @@ static void completed(const zt_persist_completion_t *c,uint64_t now)
 }
 static void request_snapshot(uint64_t now)
 {
+    /* Keep retrying a requested repair until a complete state arrives. A
+     * successful radio submission alone does not prove the host heard it. */
+    snapshot_refresh_due=0;
     if (now<snapshot_due || !config_present || !join_nonce || !view.registered) return;
     /* A registration slot is not yet a member of a frozen round. Round-zero
      * requests must use the unknown-slot form so mesh admission can deliver
@@ -949,7 +1005,7 @@ static bool host_receipt(zt_round_id_t round,const zt_wire_command_receipt_t *re
 {
     for (unsigned i=0;i<8;++i) {
         command_slot_t *slot=&commands[i];
-        if (slot->occupied!=COMMAND_DELIVERING || slot->value.round_id!=round ||
+        if ((slot->occupied!=COMMAND_DELIVERING && slot->occupied!=COMMAND_CACHED) || slot->value.round_id!=round ||
             slot->value.command.command_seq!=receipt->command_seq || !(slot->targets&(1u<<receipt->slot))) continue;
         bool ready=slot->value.command.kind==ZT_CMD_PREPARE_ROUND && receipt->state==ZT_RECEIPT_PREPARED_READY;
         if (ready) {
@@ -1023,6 +1079,7 @@ static void apply_join_result(const zt_wire_join_result_t *j,uint64_t now)
     if (j->status==ZT_JOIN_REGISTERED || j->status==ZT_JOIN_REJOINED) {
         if (view.self_slot!=ZT_SLOT_INVALID && current.round_id && j->slot!=view.self_slot) { error_overlay(ZT_ERR_AUTH); return; }
         view.self_slot=j->slot; view.registered=1;
+        if (!current.round_id && view.host_control_error==ZT_ERR_HOST_REGISTRATION) clear_host_control();
         if (!current.round_id) view.admission=ZT_ADMISSION_WAITING_FOR_ROUND;
         request_snapshot(now);
     } else if (j->status==ZT_JOIN_REGISTRATION_CLOSED || j->status==ZT_JOIN_ROOM_FULL) {
@@ -1054,6 +1111,28 @@ static bool registration_result(const input_t *in,uint64_t now)
     }
     return true;
 }
+static bool host_reset_snapshot_request(const input_t *in,uint64_t now)
+{
+    if (!is_host() || !in->round || in->round!=reset_delivery.round) return false;
+    zt_wire_snapshot_request_t request;
+    if (zt_wire_decode_snapshot_request(in->bytes,in->len,&request)!=ZT_OK || request.slot>=ZT_MAX_PLAYERS) return true;
+    unsigned target=request.slot;
+    if (!(reset_delivery.slots&(1u<<target)) || !reset_delivery.seq[target] ||
+        !mac_equal(&in->origin,&reset_delivery.macs[target]) || now<reset_delivery.request_due[target]) return true;
+    /* A returning badge asks about its old round. Replay only the exact RESET
+     * authorized for that registration, even while a newer round is active. */
+    zt_wire_payload_t p={0};
+    p.command=(zt_wire_command_t){.command_seq=reset_delivery.seq[target],.kind=ZT_CMD_RESET_GAME,
+        .target_slot=target,.valid_until_elapsed_ms=reset_delivery.valid_until[target]};
+    uint64_t registration=reset_delivery.registration[target];
+    if (registration) {
+        p.command.args_len=14; memcpy(p.command.args,reset_delivery.macs[target].bytes,6);
+        for (unsigned i=0;i<8;++i) p.command.args[6+i]=(uint8_t)(registration>>(8*i));
+    }
+    if (send_payload(in->round,ZT_PKT_COMMAND,&p,ZT_TX_PRIO_EVENT_CONTROL)==ZT_OK)
+        reset_delivery.request_due[target]=now+ZT_SNAPSHOT_REQUEST_INTERVAL_MS*1000ULL;
+    return true;
+}
 static void host_snapshot_request(const input_t *in,uint64_t now)
 {
     zt_wire_snapshot_request_t r;
@@ -1077,7 +1156,6 @@ static bool process_command(unsigned ci,uint64_t now)
         reset_receipt_due=0;
         return true;
     }
-    if (msg->round_id==reset_record.round_id) return true;
     if (cmd->kind==ZT_CMD_RESET_GAME) {
         if (!msg->round_id || !cmd->command_seq || cmd->target_slot>=ZT_MAX_PLAYERS ||
             (cmd->args_len!=0 && cmd->args_len!=14)) return true;
@@ -1087,12 +1165,16 @@ static bool process_command(unsigned ci,uint64_t now)
             for (unsigned i=0;i<8;++i) target_registration|=(uint64_t)cmd->args[6+i]<<(8*i);
             if (!target_registration) return true;
         }
-        bool self=cmd->args_len ? mac_equal(&target_mac,&view.self_mac) : cmd->target_slot==view.self_slot;
+        bool retired_round=msg->round_id==reset_record.round_id;
+        bool self=cmd->args_len ? mac_equal(&target_mac,&view.self_mac) :
+            cmd->target_slot==(retired_round ? reset_record.slot : view.self_slot);
         if (is_host() && slot->server && !self) {
             if (!cmd->args_len) {
                 int index=roster_index(cmd->target_slot);
-                if (msg->round_id!=current.round_id || index<0) return true;
-                target_mac=current.roster[index].mac;
+                if (msg->round_id==current.round_id && index>=0) target_mac=current.roster[index].mac;
+                else if (retired_round && reset_delivery.round==msg->round_id &&
+                    (reset_delivery.known_slots&(1u<<cmd->target_slot))) target_mac=reset_delivery.macs[cmd->target_slot];
+                else return true;
             }
             /* The backend retries pending cleanup in bounded batches. Do not
              * occupy the eight gameplay command slots for an entire roster. */
@@ -1103,11 +1185,17 @@ static bool process_command(unsigned ci,uint64_t now)
             }
             reset_delivery.macs[cmd->target_slot]=target_mac;
             reset_delivery.seq[cmd->target_slot]=cmd->command_seq;
+            reset_delivery.registration[cmd->target_slot]=target_registration;
+            reset_delivery.valid_until[cmd->target_slot]=cmd->valid_until_elapsed_ms;
             reset_delivery.slots|=1u<<cmd->target_slot;
+            reset_delivery.known_slots|=1u<<cmd->target_slot;
             return true;
         }
+        if (retired_round) return true; /* Only remote server cleanup crosses our reset. */
         if (!self || !join_nonce || !view.registered || cmd->target_slot!=view.self_slot ||
-            (current.round_id && msg->round_id!=current.round_id) ||
+            /* A legacy slot-only reset belongs to a frozen round; it must
+             * never clear a reused slot in a newly registered lobby. */
+            ((!cmd->args_len || current.round_id) && msg->round_id!=current.round_id) ||
             (cmd->args_len && target_registration!=registration_id())) return true;
         zt_persist_request_t request={.kind=ZT_PERSIST_RESET_ROUND,.round_id=msg->round_id};
         request.value.reset=(zt_reset_receipt_t){msg->round_id,cmd->command_seq,view.self_slot,view.channel};
@@ -1116,6 +1204,7 @@ static bool process_command(unsigned ci,uint64_t now)
         outbound.active=false;
         return true;
     }
+    if (msg->round_id==reset_record.round_id) return true;
     if (!join_nonce || !view.registered) return true;
     bool originate=is_host() && slot->server;
     if (originate) {
@@ -1406,6 +1495,7 @@ static bool apply_assembled(uint64_t now)
         bool waiting_for_close=stage_assembled_result();
         if (save_checkpoint(now)!=ZT_OK) return false;
         pending.admission=1;
+        if (!waiting_for_close) snapshot_refresh_due=now+30000000ULL;
         return !waiting_for_close;
     }
     if (current.roster_hash!=assembly.hash || current.roster_count!=assembly.roster_count ||
@@ -1424,10 +1514,12 @@ static bool apply_assembled(uint64_t now)
         (!view.result_final || view.result_complete!=pending.final_result.complete || view.missing_slots_bitmap!=pending.final_result.missing_slots_bitmap)));
     if (!memcmp(&staged,&current,sizeof(current)) && !result_changed) {
         pending.end_present=pending.final_present=0;
+        if (!waiting_for_close) snapshot_refresh_due=now+30000000ULL;
         return !waiting_for_close;
     }
     pending.receipt.command_seq=0;
     if (save_checkpoint(now)!=ZT_OK) return false;
+    if (!waiting_for_close) snapshot_refresh_due=now+30000000ULL;
     return !waiting_for_close;
 }
 static bool process_page(unsigned pi,uint64_t now)
@@ -1494,6 +1586,7 @@ static bool process_page(unsigned pi,uint64_t now)
         return true;
     case ZT_PKT_HOST_STATE: {
         const zt_wire_host_state_t *h=&m->payload.host_state;
+        bool host_returned=!host_seen_us || (now>=host_seen_us && now-host_seen_us>=ZT_PEER_STALE_MS*1000ULL);
         server_status_observe(m->header.origin_boot_nonce,m->header.packet_seq,m->rx_us,m->header.age_ms,
             !!(h->gateway_flags&ZT_HOST_STATE_FLAG_SERVER_CONNECTED),now);
         /* Host reachability is independent of whether this round has a usable
@@ -1506,7 +1599,9 @@ static bool process_page(unsigned pi,uint64_t now)
         if (!join_nonce || !view.registered) return true;
         if (m->header.round_id!=current.round_id || h->roster_hash!=current.roster_hash || h->duration_ms!=ZT_ROUND_DURATION_MS ||
             h->round_channel!=current.round_channel || h->snapshot_rev<current.snapshot_rev || h->entry_count>12 || h->page_count>2) return true;
-        if (h->snapshot_rev>current.snapshot_rev || h->phase>current.phase) request_snapshot(now);
+        if (host_returned || h->snapshot_rev>current.snapshot_rev || h->phase>current.phase) {
+            request_snapshot(now); replay_due=0;
+        }
         if (h->phase>=ZT_PHASE_EXPIRED_PENDING_SYNC && h->winner<=ZT_ROLE_ZOMBIE &&
             !result_authoritative && h->remaining_ms<=ZT_ROUND_DURATION_MS && current.phase>=ZT_PHASE_RUNNING && current.phase<ZT_PHASE_FINAL &&
             (current.phase<ZT_PHASE_EXPIRED_PENDING_SYNC || !view.result_present || view.winner!=h->winner || view.remaining_ms!=h->remaining_ms)) {
@@ -1632,6 +1727,15 @@ static bool process_input(const input_t *in,uint64_t now)
             result.request_seq!=host_control_request.item.body.control.request_seq) return true;
         if (result.result!=ZT_OK) {
             view.host_control_error=result.result; view.host_control_pending=0; view.last_error=result.result;
+            if (result.result==ZT_ERR_HOST_REGISTRATION && !current.round_id) {
+                /* A rejected lobby identity cannot be repaired by resending B.
+                 * Require an explicit A with a fresh nonce; never clear a
+                 * prepared/running/completed round to repair a reset request. */
+                view.registered=0; view.self_slot=ZT_SLOT_INVALID;
+                join_nonce=0; join_due=0; rejoining=false;
+                view.admission=ZT_ADMISSION_LOBBY; view.host_control=ZT_HOST_CONTROL_NONE;
+                portENTER_CRITICAL(&view_guard); published_registration_id=0; portEXIT_CRITICAL(&view_guard);
+            }
         }
         /* Acceptance is not a local phase transition. Keep the busy label
          * until authenticated snapshots/commands apply START or RESET. */
@@ -1673,6 +1777,7 @@ static bool process_input(const input_t *in,uint64_t now)
         }
         return true;
     }
+    if (in->type==ZT_PKT_SNAPSHOT_REQUEST && host_reset_snapshot_request(in,now)) return true;
     if (in->round && in->round==reset_record.round_id && in->type!=ZT_PKT_BEACON) return true;
     if (in->type==ZT_PKT_JOIN) { host_join(in,now); return true; }
     if (in->type==ZT_PKT_SNAPSHOT_REQUEST) { host_snapshot_request(in,now); return true; }
@@ -1813,11 +1918,13 @@ static void peers_refresh(uint64_t now)
         view.selected_tier=view.contacts[i].tier; break;
     }
 }
-static void attempt(uint64_t now)
+static void attempt(uint64_t now,uint64_t pressed_us)
 {
     zt_clock_sample_t c; zt_wire_role_entry_t *r=self_role();
+    /* Input queue latency cannot turn a countdown press into a live tag. */
+    if (!clock_running(now,&c) || pressed_us>now || now-pressed_us>(uint64_t)c.elapsed_ms*1000ULL) return;
     if (!r || r->role!=ZT_ROLE_ZOMBIE) { feedback(ZT_FEEDBACK_STAY_CLEAR,now); return; }
-    if (!clock_running(now,&c) || cooldown_until>now || outbound.active || pending.id || r->cause_slot!=view.self_slot ||
+    if (cooldown_until>now || outbound.active || pending.id || r->cause_slot!=view.self_slot ||
         (!r->cause_seq && view.self_slot!=current.patient_zero_slot)) return;
     if (view.selected_target==ZT_SLOT_INVALID) { feedback(ZT_FEEDBACK_GET_CLOSER,now); return; }
     if (attempt_seq==UINT32_MAX || zt_mesh_get_boot_nonce(&boot_nonce)!=ZT_OK) { feedback(ZT_FEEDBACK_SYNC_REQUIRED,now); return; }
@@ -1910,7 +2017,7 @@ static void button(const zt_button_edge_t *b,uint64_t now)
         }
         join_service(now); return;
     }
-    if (view.admission==ZT_ADMISSION_RUNNING) attempt(now);
+    if (view.admission==ZT_ADMISSION_RUNNING) attempt(now,b->at_us);
 }
 static void beacon_service(uint64_t now)
 {
@@ -2087,6 +2194,27 @@ static void host_snapshot_service(uint64_t now)
 static void host_command_service(uint64_t now)
 {
     if (!is_host()) return;
+    /* Replay actual local application evidence without rearming radio work.
+     * Remote receipts still come only from their authenticated target. */
+    for (unsigned i=0;i<ZT_PENDING_COMMAND_CAPACITY;++i) {
+        zt_game_feed_item_t item={.kind=ZT_GAME_FEED_COMMAND_RECEIPT};
+        portENTER_CRITICAL(&ingress_guard);
+        command_slot_t *slot=&commands[i];
+        bool replay=slot->occupied && slot->receipt_pending;
+        if (replay) {
+            item.round_id=slot->value.round_id; item.body.command_receipt=slot->local_receipt;
+            slot->receipt_pending=0;
+        }
+        portEXIT_CRITICAL(&ingress_guard);
+        if (!replay) continue;
+        if (feed(&item)!=ZT_OK) {
+            portENTER_CRITICAL(&ingress_guard);
+            if (slot->occupied && slot->value.round_id==item.round_id &&
+                slot->value.command.command_seq==item.body.command_receipt.command_seq) slot->receipt_pending=1;
+            portEXIT_CRITICAL(&ingress_guard);
+        }
+        break;
+    }
     static unsigned cursor;
     for (unsigned n=0;n<ZT_PENDING_COMMAND_CAPACITY*ZT_MAX_PLAYERS;++n) {
         unsigned index=cursor++%(ZT_PENDING_COMMAND_CAPACITY*ZT_MAX_PLAYERS), ci=index/ZT_MAX_PLAYERS, target=index%ZT_MAX_PLAYERS;
@@ -2097,8 +2225,7 @@ static void host_command_service(uint64_t now)
             (uint32_t)clock.elapsed_ms>=slot->value.command.valid_until_elapsed_ms;
         if (!slot->targets || now>=slot->deadline_us || expired || slot->value.round_id!=current.round_id) {
             if (slot->targets && !expired) {
-                view.last_error=ZT_ERR_TIMEOUT;
-                ESP_LOGW("zt_game","Command %lu round %llu missing receipt bitmap 0x%05lx",
+                ESP_LOGI("zt_game","Cached command %lu round %llu for absent receipt bitmap 0x%05lx",
                     (unsigned long)slot->value.command.command_seq,(unsigned long long)slot->value.round_id,(unsigned long)slot->targets);
             }
             portENTER_CRITICAL(&ingress_guard); slot->occupied=COMMAND_CACHED; portEXIT_CRITICAL(&ingress_guard);
@@ -2206,7 +2333,9 @@ static void timers(uint64_t now)
         if (current.received[view.self_slot]<last_local_event.event_seq) emit_event(current.round_id,&last_local_event);
         if (++event_retry_count>=3) event_retry_count=0; else event_retry_us=now+1000000ULL;
     }
-    if (view.registered && !is_host() && (!current.round_id ||
+    /* Healthy periodic role pages postpone this fallback. A lost request or
+     * partial snapshot keeps the existing five-second repair retry active. */
+    if (view.registered && !is_host() && (now>=snapshot_refresh_due || !current.round_id ||
         (current.phase>=ZT_PHASE_EXPIRED_PENDING_SYNC && !view.result_final))) request_snapshot(now);
     host_control_service(now); host_snapshot_service(now); host_command_service(now); host_decision_service(now);
     closed_feed(now); outbound_service(now); time_service(now); join_service(now); beacon_service(now); replay_service(now); inventory_service(now);

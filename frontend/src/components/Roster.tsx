@@ -4,6 +4,7 @@ import './Roster.css';
 export interface RosterProps {
   players: { id: string; slot: number; name: string; role?: 'H' | 'Z' }[];
   rolesAssigned: boolean;
+  countingDown?: boolean;
   loading?: boolean;
   maxEntries?: number;
   className?: string;
@@ -45,6 +46,7 @@ const RosterColumn: React.FC<ColumnProps> = ({ label, tone, players, hidden, emp
 export const Roster: React.FC<RosterProps> = ({
   players,
   rolesAssigned,
+  countingDown = false,
   loading = false,
   maxEntries = 20,
   className = '',
@@ -69,7 +71,7 @@ export const Roster: React.FC<RosterProps> = ({
       </header>
 
       <div className="roster-panel">
-        <p className="roster-note">{rolesAssigned ? `Saved server roles · online badge count unknown${unknown ? ` · ${unknown} roles unknown` : ''}` : 'Saved registrations · roles unassigned · online badge count unknown'}</p>
+        <p className="roster-note">{rolesAssigned ? `${countingDown ? 'Roles assigned · gameplay begins at zero' : 'Saved server roles · online badge count unknown'}${unknown ? ` · ${unknown} roles unknown` : ''}` : 'Saved registrations · roles unassigned · online badge count unknown'}</p>
         {loading || total === 0 ? (
           <p className="roster-empty roster-empty-all">
             {loading ? 'Loading saved registrations…' : 'No saved registrations. Press A on each badge to join.'}

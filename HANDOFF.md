@@ -1,4 +1,63 @@
-# LIVEG010 packaged — winner display, faster catch-up, and host buttons
+# LIVEG011 branch — nonblocking sync and shared demo countdown
+
+Current work is on `codex/firmware-sync-recovery`, based on main `62c4dab`, in
+`/Users/amitojsingh/Desktop/misc/hackerbadge/firmware-sync-recovery`.
+See `docs/firmware-sync-recovery.md` for behavior and rollout details.
+
+The user requested firmware fixes on a separate branch with frequent commits.
+They retained the server's all-registered-badges-ready requirement, then added
+a shared five-second demo countdown on frontend and badges, showing roles while
+gameplay is inactive. Backend changes are limited to the countdown schedule and
+server timestamp for dashboard clock alignment; readiness policy is unchanged.
+
+- Gateway command overflow no longer pins the live socket mailbox. Missing
+  targets receive three attempts over six seconds, then remain in the bounded
+  repair cache. Server replay preserves real host receipts without rearming
+  absent targets. Returning badges request state; lost repair requests retry.
+- START yields to queued registrations' first HTTP attempts. Rejected controls
+  display specific registration/roster/round reasons. Unsupported endpoints
+  stop automatic retries instead of repeatedly interrupting the live socket.
+- Host reset preserves queued peer cleanup commands and allows later remote
+  reset retries through the retired-round guard. Previously resetting the host
+  first could leave the other badges in their old game.
+- A badge returning after the server cleanup window pulls the original RESET
+  using its old-round snapshot request. Authenticated, per-target rate-limited
+  repair retains the latest reset's exact target registration during this host
+  boot, protecting badges registered again. Stale lobby host registrations now
+  return to A: REGISTER without discarding an existing round.
+- A single scheduled start time drives the five-second countdown. Role displays
+  remain visible; timers and tag controls wait for zero, including queued
+  button presses and radio tag requests captured before the start.
+- Firmware build ID is `LIVEG011`. Change `START_COUNTDOWN_MS` in
+  `backend/src/gateway.ts` from `5_000` to `60_000` for the full-game countdown.
+
+Live read-only evidence from this task supersedes the older deployment inference
+below: GET `/gateway/control` returns `401 {"v":1,"code":"UNAUTHORIZED"}`, and
+public population state is an empty lobby with no connected host. The route is
+recognized by the running backend. The exact earlier B: RETRY rejection was not
+captured; no live start/reset request was issued to reproduce it. Evidence files
+are ignored under `.orchestration/live-control-get.json` and `live-state.json`.
+
+Final ESP-IDF 5.5.3 build and offline packaging passed from clean source
+`901568e0cfaa53c2b02042d247ae96b57af14f70`. Build log:
+`.orchestration/build-liveg011-final.log`. Newest release in this worktree:
+`.orchestration/releases/dev-20260920T100642.073717Z/release-manifest.json`.
+App size: 1,321,744 bytes; SHA-256:
+`2bd90814358113075d8bee70829d6c8c0350cbcb0de6ddfe432fd1180272ad60`.
+Backend typecheck and frontend production build passed. Use this worktree's
+guarded operator tool/release when flashing; the original main checkout's newest
+release is separate. The earlier LIVEG011 package ending `100222.559596Z` lacks
+late-reset pull recovery and is superseded by the release above.
+
+No deployment, flashing, serial access, hardware tests, simulations or automated
+test suites were performed. Firmware compilation, backend typechecking and
+frontend production compilation validate source only. The prior unused
+`self_install` warning and four prior frontend lint errors remain. Keep private
+build headers and binary artifacts out of Git. Do not push integration history.
+
+---
+
+# Historical LIVEG010 packaged — winner display, faster catch-up, and host buttons
 
 ## Current checkpoint — 2026-09-20
 

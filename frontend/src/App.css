@@ -285,8 +285,56 @@
 }
 
 .status-waiting { color: var(--ash); }
+.status-countdown { color: var(--ember); }
 .status-zombies { color: #ff5555; }
 .status-humans { color: #70baff; }
+
+.round-countdown {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px 20px 28px;
+  text-align: center;
+  background: var(--glass-deep);
+  border: 1px solid rgba(181, 131, 41, 0.45);
+  border-radius: 3px;
+  box-shadow: var(--pall);
+}
+
+.countdown-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  line-height: 1.7;
+  color: var(--ember);
+}
+
+.countdown-value {
+  margin: 12px 0 16px;
+  font-family: var(--mono);
+  font-size: clamp(72px, 18vw, 112px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--bone);
+}
+
+.countdown-value span {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.13em;
+  color: var(--ash);
+}
+
+.countdown-description {
+  max-width: 48ch;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ash);
+}
 
 .status-active {
   color: var(--rot-lit);

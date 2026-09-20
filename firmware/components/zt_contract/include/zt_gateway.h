@@ -340,6 +340,10 @@ zt_err_t zt_gateway_encode_registration(const zt_registration_request_t *request
 zt_err_t zt_gateway_decode_registration(const char *json, size_t len, zt_json_workspace_t *workspace, zt_registration_response_t *out);
 zt_err_t zt_gateway_encode_control(const zt_gateway_control_request_t *request, char *out, size_t capacity, size_t *written);
 zt_err_t zt_gateway_decode_control(const char *json, size_t len, zt_json_workspace_t *workspace, zt_gateway_control_response_t *out);
+/* Semantic errors are trusted only when the rejection echoes this exact action
+ * and request identity. Unknown codes remain a generic conflict. */
+zt_err_t zt_gateway_decode_control_rejection(const char *json, size_t len, zt_json_workspace_t *workspace,
+    const zt_gateway_control_request_t *request, zt_err_t *reason);
 zt_err_t zt_gateway_bridge_publish(const zt_gateway_message_t *verified);
 /* Persist cursor only when ALL applicable outbox content is durably applied;
  * targeted command gaps mean largest-seen sequence is never sufficient. */
