@@ -1077,6 +1077,7 @@ static void apply_join_result(const zt_wire_join_result_t *j,uint64_t now)
     if (j->status==ZT_JOIN_REGISTERED || j->status==ZT_JOIN_REJOINED) {
         if (view.self_slot!=ZT_SLOT_INVALID && current.round_id && j->slot!=view.self_slot) { error_overlay(ZT_ERR_AUTH); return; }
         view.self_slot=j->slot; view.registered=1;
+        if (!current.round_id && view.host_control_error==ZT_ERR_HOST_REGISTRATION) clear_host_control();
         if (!current.round_id) view.admission=ZT_ADMISSION_WAITING_FOR_ROUND;
         request_snapshot(now);
     } else if (j->status==ZT_JOIN_REGISTRATION_CLOSED || j->status==ZT_JOIN_ROOM_FULL) {
@@ -1698,6 +1699,15 @@ static bool process_input(const input_t *in,uint64_t now)
             result.request_seq!=host_control_request.item.body.control.request_seq) return true;
         if (result.result!=ZT_OK) {
             view.host_control_error=result.result; view.host_control_pending=0; view.last_error=result.result;
+            if (result.result==ZT_ERR_HOST_REGISTRATION && !current.round_id) {
+                /* A rejected lobby identity cannot be repaired by resending B.
+                 * Require an explicit A with a fresh nonce; never clear a
+                 * prepared/running/completed round to repair a reset request. */
+                view.registered=0; view.self_slot=ZT_SLOT_INVALID;
+                join_nonce=0; join_due=0; rejoining=false;
+                view.admission=ZT_ADMISSION_LOBBY; view.host_control=ZT_HOST_CONTROL_NONE;
+                portENTER_CRITICAL(&view_guard); published_registration_id=0; portEXIT_CRITICAL(&view_guard);
+            }
         }
         /* Acceptance is not a local phase transition. Keep the busy label
          * until authenticated snapshots/commands apply START or RESET. */
