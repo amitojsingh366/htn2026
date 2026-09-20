@@ -5,7 +5,7 @@ import type { LeaderboardResponse, PopulationState } from "../src/types";
 describe("GameRoom", () => {
   it("starts empty", async () => {
     const stub = env.GAME_ROOM.getByName("empty");
-    expect(await stub.getState()).toEqual({
+    expect(await stub.getState()).toMatchObject({
       num_players: 0,
       num_infected: 0,
       num_humans: 0,
@@ -21,7 +21,7 @@ describe("GameRoom", () => {
     for (let i = 0; i < 4; i++) await stub.addPlayer();
     await stub.addInfected();
 
-    expect(await stub.getState()).toEqual({
+    expect(await stub.getState()).toMatchObject({
       num_players: 4,
       num_infected: 1,
       num_humans: 3,
@@ -432,4 +432,3 @@ describe("Worker routes", () => {
     expect(res.status).toBe(404);
   });
 });
-

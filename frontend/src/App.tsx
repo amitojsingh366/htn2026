@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { PopulationState, type PopulationStateData } from './components/PopulationState';
 import { Roster } from './components/Roster';
+import { OutbreakDirector } from './components/OutbreakDirector';
 import './App.css';
 
 const GAME_ID = '005a544d454d4f01';
@@ -160,6 +161,8 @@ function App() {
           <p className="guide-desc">Reset clears the server immediately, even when badges are offline or have forgotten the game. An offline badge may keep its old game until it receives a reset.</p>
           {resetting && <p className="guide-desc" role="status">An earlier reset is still waiting. Press Reset Game to clear the server immediately.</p>}
         </section>
+
+        <OutbreakDirector apiBaseUrl={API_BASE} />
 
         <details className="usage-guide saved-records">
           <summary>Registered badges · saved acknowledgments</summary>

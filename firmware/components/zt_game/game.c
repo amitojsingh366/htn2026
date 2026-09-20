@@ -145,6 +145,10 @@ static bool config_present, close_committed, checkpoint_dirty, host_latched, rej
 static uint32_t round_end_elapsed_ms=ZT_ROUND_DURATION_MS;
 static uint32_t result_command_seq;
 static bool result_authoritative;
+/* Cosmetic dedupe is independent of durable gameplay command checkpoints. */
+static zt_round_id_t announcement_round;
+static uint32_t announcement_seq;
+static uint64_t announcement_next_us;
 static uint32_t gateway_serial;
 static zt_boot_nonce_t gateway_boot;
 static uint64_t gateway_seen_us, host_seen_us;
@@ -378,6 +382,13 @@ static zt_err_t post_command(const zt_server_command_t *v,uint64_t rx,uint32_t a
             portEXIT_CRITICAL(&ingress_guard); return same ? ZT_OK : ZT_ERR_CONFLICT;
         }
         available=i; break;
+    }
+    if (v->command.kind==ZT_CMD_ANNOUNCE) {
+        unsigned count=0;
+        for (unsigned i=0;i<ZT_PENDING_COMMAND_CAPACITY;++i)
+            if (commands[i].occupied && commands[i].occupied!=COMMAND_CACHED &&
+                commands[i].value.command.kind==ZT_CMD_ANNOUNCE) ++count;
+        if (count>=ZT_ANNOUNCE_QUEUE_CAPACITY) { portEXIT_CRITICAL(&ingress_guard); return ZT_ERR_BUSY; }
     }
     /* Keep one existing slot available for an explicit reset even when older
      * commands are waiting indefinitely for missing snapshot pages. */
@@ -719,6 +730,7 @@ static void reset_to_lobby(void)
     rejoining=close_committed=checkpoint_dirty=false; join_nonce=0; join_due=time_sent_us=cooldown_until=0;
     round_end_elapsed_ms=ZT_ROUND_DURATION_MS;
     result_command_seq=0; result_authoritative=false;
+    announcement_round=0; announcement_seq=0; announcement_next_us=0;
     beacon_due=host_metadata_due=snapshot_due=snapshot_refresh_due=0;
     gateway_boot=gateway_seen_us=0; gateway_serial=0;
     zt_game_clock_reset(); zt_game_peers_configure(config.game_id,NULL);
@@ -1271,13 +1283,37 @@ static bool process_command(unsigned ci,uint64_t now)
     }
     if (cmd->kind==ZT_CMD_ANNOUNCE) {
         zt_wire_announce_args_t a; zt_clock_sample_t clock;
-        if (msg->round_id==current.round_id && zt_wire_decode_announce_args(cmd->args,cmd->args_len,&a)==ZT_OK &&
-            zt_clock_read(now,&clock)==ZT_OK && clock.elapsed_ms>=0 && (uint32_t)clock.elapsed_ms<cmd->valid_until_elapsed_ms &&
-            now>=view.announcement_expires_us+5000000ULL) {
-            memcpy(view.announcement,a.text,a.text_len); view.announcement[a.text_len]=0;
-            view.announcement_expires_us=now+ZT_ANNOUNCE_MAX_DISPLAY_MS*1000ULL;
+        if (msg->round_id!=current.round_id) return true;
+        if (zt_wire_decode_announce_args(cmd->args,cmd->args_len,&a)!=ZT_OK ||
+            cmd->valid_until_elapsed_ms==ZT_COMMAND_NO_EXPIRY) {
+            command_receipt(&receipt); return true;
         }
-        if (originate && msg->round_id==current.round_id) host_arm_command(ci,now);
+        if (announcement_round!=current.round_id) {
+            announcement_round=current.round_id; announcement_seq=0;
+        }
+        if (cmd->command_seq<=announcement_seq) {
+            receipt.state=cmd->command_seq==announcement_seq ? ZT_RECEIPT_APPLIED : ZT_RECEIPT_REJECTED;
+            receipt.detail=cmd->command_seq==announcement_seq ? ZT_DETAIL_NONE : ZT_DETAIL_STALE_REVISION;
+            command_receipt(&receipt);
+            if (originate && cmd->command_seq==announcement_seq) host_arm_command(ci,now);
+            return true;
+        }
+        if (current.phase!=ZT_PHASE_RUNNING || zt_clock_read(now,&clock)!=ZT_OK ||
+            clock.quality!=ZT_TIME_INITIALIZED || clock.elapsed_ms<0 ||
+            (uint32_t)clock.elapsed_ms>=cmd->valid_until_elapsed_ms) {
+            receipt.detail=ZT_DETAIL_STALE_REVISION; command_receipt(&receipt); return true;
+        }
+        /* Leave a bounded waiting slot; critical commands are selected first. */
+        if (now<announcement_next_us) return false;
+        uint32_t display_ms=cmd->valid_until_elapsed_ms-(uint32_t)clock.elapsed_ms;
+        if (display_ms>ZT_ANNOUNCE_MAX_DISPLAY_MS) display_ms=ZT_ANNOUNCE_MAX_DISPLAY_MS;
+        memcpy(view.announcement,a.text,a.text_len); view.announcement[a.text_len]=0;
+        view.announcement_expires_us=now+display_ms*1000ULL;
+        announcement_next_us=now+ZT_ANNOUNCE_MIN_INTERVAL_MS*1000ULL;
+        announcement_seq=cmd->command_seq;
+        receipt.state=ZT_RECEIPT_APPLIED; receipt.detail=ZT_DETAIL_NONE;
+        command_receipt(&receipt);
+        if (originate) host_arm_command(ci,now);
         return true;
     }
     if (cmd->valid_until_elapsed_ms!=ZT_COMMAND_NO_EXPIRY) { command_receipt(&receipt); return true; }
@@ -2221,10 +2257,12 @@ static void host_command_service(uint64_t now)
         command_slot_t *slot=&commands[ci];
         if (slot->occupied!=COMMAND_DELIVERING) continue;
         zt_clock_sample_t clock;
-        bool expired=slot->value.command.kind==ZT_CMD_ANNOUNCE && zt_clock_read(now,&clock)==ZT_OK && clock.elapsed_ms>=0 &&
-            (uint32_t)clock.elapsed_ms>=slot->value.command.valid_until_elapsed_ms;
+        bool cosmetic=slot->value.command.kind==ZT_CMD_ANNOUNCE;
+        bool expired=cosmetic && (current.phase!=ZT_PHASE_RUNNING || zt_clock_read(now,&clock)!=ZT_OK ||
+            clock.quality!=ZT_TIME_INITIALIZED || clock.elapsed_ms<0 ||
+            (uint32_t)clock.elapsed_ms>=slot->value.command.valid_until_elapsed_ms);
         if (!slot->targets || now>=slot->deadline_us || expired || slot->value.round_id!=current.round_id) {
-            if (slot->targets && !expired) {
+            if (slot->targets && !expired && !cosmetic) {
                 ESP_LOGI("zt_game","Cached command %lu round %llu for absent receipt bitmap 0x%05lx",
                     (unsigned long)slot->value.command.command_seq,(unsigned long long)slot->value.round_id,(unsigned long)slot->targets);
             }
@@ -2246,7 +2284,7 @@ static void host_command_service(uint64_t now)
         }
         /* Submission success is only transport custody. Only that target's
          * authenticated terminal receipt removes its bit. */
-        if (send_payload(slot->value.round_id,ZT_PKT_COMMAND,&p,ZT_TX_PRIO_EVENT_CONTROL)==ZT_OK) {
+        if (send_payload(slot->value.round_id,ZT_PKT_COMMAND,&p,cosmetic ? ZT_TX_PRIO_COSMETIC : ZT_TX_PRIO_EVENT_CONTROL)==ZT_OK) {
             if (slot->first_broadcast) {
                 slot->first_broadcast=0;
                 for (unsigned s=0;s<ZT_MAX_PLAYERS;++s) if (slot->targets&(1u<<s)) {
@@ -2414,7 +2452,10 @@ zt_err_t zt_game_service(uint64_t now_us)
     for (unsigned i=0;i<8;++i) if (commands[i].occupied==2) {
         bool reset=commands[i].value.command.kind==ZT_CMD_RESET_GAME;
         bool old_reset=chosen>=0 && commands[chosen].value.command.kind==ZT_CMD_RESET_GAME;
-        if (chosen<0 || (reset && !old_reset) || (reset==old_reset && commands[i].value.command.command_seq<commands[chosen].value.command.command_seq)) chosen=i;
+        bool cosmetic=commands[i].value.command.kind==ZT_CMD_ANNOUNCE;
+        bool old_cosmetic=chosen>=0 && commands[chosen].value.command.kind==ZT_CMD_ANNOUNCE;
+        if (chosen<0 || (reset && !old_reset) || (!cosmetic && old_cosmetic) ||
+            (reset==old_reset && cosmetic==old_cosmetic && commands[i].value.command.command_seq<commands[chosen].value.command.command_seq)) chosen=i;
     }
     if (chosen>=0 && process_command(chosen,now)) {
         portENTER_CRITICAL(&ingress_guard);

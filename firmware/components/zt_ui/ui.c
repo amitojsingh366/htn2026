@@ -256,11 +256,14 @@ zt_err_t zt_ui_submit_snapshot(const zt_ui_snapshot_t *snapshot)
     }
     if (snapshot->announcement_expires_us != ui.last_snapshot_announcement_until ||
         strncmp(snapshot->announcement,ui.last_snapshot_announcement,ZT_ANNOUNCE_MAX_LEN)) {
-        if (announcement_len)
-            (void)announce_locked(snapshot->announcement,announcement_len,snapshot->announcement_expires_us,now);
-        memcpy(ui.last_snapshot_announcement,snapshot->announcement,announcement_len);
-        ui.last_snapshot_announcement[announcement_len] = 0;
-        ui.last_snapshot_announcement_until = snapshot->announcement_expires_us;
+        zt_err_t result=announcement_len ? announce_locked(snapshot->announcement,announcement_len,snapshot->announcement_expires_us,now) : ZT_OK;
+        /* The game and display run on separate task ticks. Retry the coalesced
+         * snapshot if the display's own 15-second gate is still finishing. */
+        if (result!=ZT_ERR_BUSY) {
+            memcpy(ui.last_snapshot_announcement,snapshot->announcement,announcement_len);
+            ui.last_snapshot_announcement[announcement_len] = 0;
+            ui.last_snapshot_announcement_until = snapshot->announcement_expires_us;
+        }
     }
     /* One coalescing mailbox and one immutable frame copy, no snapshot queue. */
     ui.latest = *snapshot;

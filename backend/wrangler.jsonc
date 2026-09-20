@@ -3,8 +3,17 @@
   "name": "htn2026-backend",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-19",
-  "secrets": { "required": ["ZT_GATEWAY_TOKEN", "ZT_HOST_MAC"] },
-  "assets": { "directory": "../frontend/dist", "binding": "ASSETS", "run_worker_first": true },
+  "secrets": {
+    "required": [
+      "ZT_GATEWAY_TOKEN",
+      "ZT_HOST_MAC"
+    ]
+  },
+  "assets": {
+    "directory": "../frontend/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   "observability": {
     "enabled": true
   },
@@ -13,13 +22,36 @@
       {
         "name": "GAME_ROOM",
         "class_name": "GameRoom"
+      },
+      {
+        "name": "OUTBREAK_DIRECTOR",
+        "class_name": "OutbreakDirector"
       }
     ]
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["GameRoom"]
+      "new_sqlite_classes": [
+        "GameRoom"
+      ]
+    },
+    {
+      "tag": "v2-outbreak-director",
+      "new_sqlite_classes": [
+        "OutbreakDirector"
+      ]
     }
-  ]
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "DIRECTOR_ENABLED": "false",
+    "DIRECTOR_GAME_ID": "005a544d454d4f01",
+    "OPENAI_MODEL": "gpt-4.1-mini",
+    "DIRECTOR_DAILY_REQUEST_LIMIT": "60",
+    "DIRECTOR_ROUND_REQUEST_LIMIT": "18",
+    "DIRECTOR_MAX_OUTPUT_TOKENS": "600"
+  }
 }

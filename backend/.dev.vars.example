@@ -1,0 +1,7 @@
+# Local server secrets only. Copy to .dev.vars (ignored), then fill in privately.
+# Existing host gateway credentials:
+ZT_GATEWAY_TOKEN=
+ZT_HOST_MAC=
+# Optional: absence disables model execution. Never prefix this with VITE_.
+OPENAI_API_KEY=
+# Nonsecret enable/model/budget settings are in wrangler.jsonc.

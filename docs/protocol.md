@@ -68,6 +68,41 @@ TAG_RESULT codes: ACCEPTED=0, ALREADY_ZOMBIE=1, OUT_OF_RANGE=2, ROUND_INACTIVE=3
 
 Command arguments are specified below and never exceed 175 bytes. Use roster/state pages, not generic fragmentation. ANNOUNCE96 ASCII easily fits. PREPARE and START refer to assembled roster_hash/snapshot_rev. No command embeds an unbounded log. Fields marked role_rev u16 must not wrap within a round.
 
+`ANNOUNCE` is now connected from the WSS gateway decoder through the game owner
+and authenticated mesh to the badge display. Its existing JSON command fields are
+`seq`, `round_id`, `type:"ANNOUNCE"`, `target`, `valid_until_elapsed_ms`, and
+`text`. Text must contain 1–96 printable ASCII characters. Escaped printable
+characters are decoded before the length check; control characters and Unicode
+outside printable ASCII are rejected. An expiry of `4294967295` is invalid for
+an announcement. The wire argument remains one length byte plus text, so the
+largest complete announcement frame is 172 bytes, below the 250-byte limit.
+
+The game owner admits at most three live announcement command slots and selects
+gameplay commands first. It requires the current running round and an initialized
+round clock, spaces display admission by at least 15 seconds, and caps display at
+the earlier of ten seconds or the command's elapsed-time expiry. The display task
+retries a coalesced announcement when its independent rate gate is still finishing;
+infection/tag feedback retains priority. Origin and relay transmissions use the
+cosmetic priority and carry the same expiry into the existing radio queue.
+
+Each badge sends an `applied` receipt when the text is admitted to its display
+snapshot, or `rejected` when a same-round command is stale/invalid. This is not a
+claim that a player read the message: higher-priority feedback can cover it.
+Repeated command sequences do not restart display; older announcement sequences
+are rejected after a newer one was admitted. Cosmetic deduplication is RAM-only
+and scoped to the current round/boot, while server action IDs and command receipts
+provide durable retry control. A reboot inside an unacknowledged message's TTL
+can replay it; announcements do not add flash writes or alter durable gameplay
+checkpoints. Expired announcements may be dropped without receipts or blocking
+critical command recovery.
+
+The host remains the only badge with Internet access. OpenAI credentials and
+model execution belong to the backend; this path carries only bounded text and
+does not change roles, scores, timers, tag eligibility, or infection decisions.
+Run `sh firmware/tests/run-announcement-tests.sh` for the native gateway decoder
+boundary checks. Radio delivery and physical screen behavior still need the
+normal hardware acceptance run after the operator installs the firmware.
+
 ### Direct proximity and timing
 
 Only a BEACON with hops=0, ttl=0, header origin MAC equal to SDK RX source MAC, valid slot/MAC mapping and matching round can update that player's proximity. A relayed EVENT received loudly is evidence of a nearby relay, not of a nearby victim/actor. Direct TAG_REQUEST and TAG_RESULT also require actual SDK source MAC equals the expected roster player; they are never forwarded. Threshold checks use both tagger's recent direct samples and victim's own direct samples/request RSSI. The tighter §4.3 source-age/three-sample rules and two-sided checks are mandatory.
@@ -187,4 +222,3 @@ Arm's length is the intended interaction, not a guaranteed radio boundary. Body 
 8. A victim that cannot persist returns `BUSY` and remains human. Invalid/late/out-of-range requests return bounded reason codes when safe; do not create response storms to malformed traffic.
 
 Result codes: `ACCEPTED=0`, `ALREADY_ZOMBIE=1`, `OUT_OF_RANGE=2`, `ROUND_INACTIVE=3`, `STALE_ACTOR=4`, `BUSY=5`, `NOT_ROSTERED=6`, `PENDING=7`. Never relay TAG or TAG_RESULT.
-

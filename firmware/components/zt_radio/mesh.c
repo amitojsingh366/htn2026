@@ -372,6 +372,7 @@ static zt_err_t transmit(zt_round_id_t round, uint8_t type, const zt_wire_payloa
     if (zt_radio_flood_type(type)) { h.flags = ZT_WIRE_FLAG_RELAY_CAPABLE; h.ttl_remaining = ZT_FLOOD_TTL; }
     if (type == ZT_PKT_TAG_REQUEST || type == ZT_PKT_TAG_RESULT) priority = ZT_TX_PRIO_DIRECT_TAG;
     else if (priority == ZT_TX_PRIO_DIRECT_TAG) priority = ZT_TX_PRIO_EVENT_CONTROL;
+    if (type == ZT_PKT_COMMAND && payload->command.kind == ZT_CMD_ANNOUNCE) priority = ZT_TX_PRIO_COSMETIC;
     zt_tx_frame_t frame = {.priority = priority, .request_id = h.packet_seq, .not_before_us = now};
     if (type == ZT_PKT_TAG_REQUEST || type == ZT_PKT_TAG_RESULT) frame.bucket = ZT_BUCKET_CRITICAL;
     else if (type == ZT_PKT_BEACON) frame.bucket = ZT_BUCKET_BEACON;
@@ -382,6 +383,12 @@ static zt_err_t transmit(zt_round_id_t round, uint8_t type, const zt_wire_payloa
     if (type == ZT_PKT_BEACON) frame.expires_us = now + 500000;
     if (type == ZT_PKT_HOST_STATE || (type == ZT_PKT_COMMAND && payload->command.kind == ZT_CMD_START_ROUND)) frame.expires_us = now + 200000;
     if (type == ZT_PKT_TIME_QUERY || type == ZT_PKT_TIME_REPLY) frame.expires_us = now + 200000;
+    if (type == ZT_PKT_COMMAND && payload->command.kind == ZT_CMD_ANNOUNCE) {
+        zt_clock_sample_t clock;
+        if (round != beacon_round || zt_clock_read(now, &clock) != ZT_OK || clock.quality != ZT_TIME_INITIALIZED ||
+            clock.elapsed_ms < 0 || (uint32_t)clock.elapsed_ms >= payload->command.valid_until_elapsed_ms) return ZT_ERR_STALE;
+        frame.expires_us = now + (payload->command.valid_until_elapsed_ms - (uint32_t)clock.elapsed_ms) * 1000ULL;
+    }
     z = zt_wire_encode_envelope(&h, body, n, cfg->group_key, frame.data, sizeof(frame.data), &total);
     if (z != ZT_OK) return z;
     frame.len = total;
@@ -405,6 +412,13 @@ static zt_err_t forward(const zt_domain_message_t *m, uint64_t now)
     zt_tx_frame_t frame = {.priority = ZT_TX_PRIO_EVENT_CONTROL, .bucket = ZT_BUCKET_CONTROL,
         .not_before_us = now + (30 + esp_random() % 91) * 1000};
     if (clock_frame(m)) { frame.priority = ZT_TX_PRIO_CLOCK_REPAIR; frame.expires_us = m->rx_us + 200000; }
+    if (m->header.type == ZT_PKT_COMMAND && m->payload.command.kind == ZT_CMD_ANNOUNCE) {
+        zt_clock_sample_t clock;
+        if (m->header.round_id != beacon_round || zt_clock_read(now, &clock) != ZT_OK || clock.quality != ZT_TIME_INITIALIZED ||
+            clock.elapsed_ms < 0 || (uint32_t)clock.elapsed_ms >= m->payload.command.valid_until_elapsed_ms) return ZT_ERR_STALE;
+        frame.priority = ZT_TX_PRIO_COSMETIC;
+        frame.expires_us = now + (m->payload.command.valid_until_elapsed_ms - (uint32_t)clock.elapsed_ms) * 1000ULL;
+    }
     z = zt_wire_encode_envelope(&h, body, n, cfg->group_key, frame.data, sizeof(frame.data), &total);
     if (z != ZT_OK) return z;
     frame.len = total;

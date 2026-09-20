@@ -1,0 +1,74 @@
+.director-panel {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 24px;
+  color: var(--bone);
+  background: linear-gradient(140deg, rgba(138, 92, 196, 0.075), transparent 45%), var(--glass-deep);
+  border: 1px solid var(--iron-lit);
+  border-top: 2px solid var(--arcane);
+  border-radius: 3px;
+  box-shadow: var(--pall);
+  overflow-wrap: anywhere;
+}
+
+.director-header, .director-row, .director-config {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+
+.director-header { margin-bottom: 16px; }
+.director-header h2 { font-size: clamp(20px, 4vw, 26px); }
+.director-eyebrow { margin-bottom: 5px; color: #bd9ce7; font: 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+.director-status { padding: 5px 9px; border: 1px solid var(--iron-lit); border-radius: 2px; font: 11px var(--mono); text-transform: uppercase; color: #b4a8c4; }
+.director-status-thinking, .director-status-idle { color: var(--rot-lit); border-color: #3d5431; }
+.director-status-degraded, .director-status-budget_exhausted { color: #edc778; border-color: #765d2b; }
+.director-reason { font-size: 16px; }
+.director-feed { font: 11px/1.7 var(--mono); color: #b4a8c4; margin-top: 8px; }
+.director-warning { color: #edc778; }
+.director-config { padding: 16px 0 0; font: 11px/1.8 var(--mono); color: #b4a8c4; }
+.director-config code { color: #d7c3f2; }
+
+.director-budgets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 8px; }
+.director-budgets > div { background: rgba(138, 92, 196, 0.06); border: 1px solid var(--iron); padding: 12px; }
+.director-budgets dt { font: 10px/1.5 var(--mono); color: #b4a8c4; }
+.director-budgets dd { margin: 6px 0 0; font: 20px/1.4 var(--mono); color: var(--bone); }
+.director-budgets dd span { font-size: 11px; color: #b4a8c4; }
+.director-meta, .director-id { color: #b4a8c4; font: 11px/1.8 var(--mono); margin-top: 5px; }
+.director-id { font-size: 10px; }
+
+.director-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--iron-lit); }
+.director-section h3 { font-size: 16px; margin-bottom: 8px; }
+.director-panel h4 { font: 600 13px/1.6 var(--mono); color: var(--bone); margin: 12px 0 6px; }
+.director-observation { margin-top: 14px; padding: 14px; background: rgba(138, 92, 196, 0.05); border-left: 2px solid var(--arcane); }
+.director-observation-counts { display: flex; gap: 8px 20px; flex-wrap: wrap; font-size: 14px; }
+.director-observation-counts strong { color: #d7c3f2; font: 600 18px var(--mono); }
+.director-empty { font-size: 14px; color: #b4a8c4; padding-top: 8px; }
+.director-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.director-list > li { padding: 14px 0; border-top: 1px solid var(--iron); font-size: 14px; }
+.director-list > li:first-child { border-top: 0; padding-top: 0; }
+.director-list > li:last-child { padding-bottom: 0; }
+.director-row > strong { font: 600 12px/1.7 var(--mono); }
+.director-outcome { font: 10px/1.7 var(--mono); color: #d7c3f2; }
+.director-announcement { margin: 8px 0; font-size: 18px; }
+
+.director-details { margin-top: 12px; }
+.director-details summary { font: 11px/1.7 var(--mono); color: #c1acd9; cursor: pointer; width: fit-content; }
+.director-details summary:hover { color: var(--bone); }
+.director-details summary:focus-visible { outline: 2px solid #bd9ce7; outline-offset: 4px; }
+.director-json { white-space: pre-wrap; overflow-wrap: anywhere; background: #06040a; border: 1px solid var(--iron); border-radius: 2px; padding: 12px; font: 11px/1.8 var(--mono); color: #c5bcd2; max-height: 260px; overflow-y: auto; }
+.director-recap { margin-top: 14px; padding: 16px; background: rgba(142, 189, 114, 0.045); border: 1px solid #26331e; }
+.director-recap h4 { margin-top: 0; }
+.director-recap > p { white-space: pre-wrap; }
+.director-evidence { padding-left: 18px; font: 10px/1.8 var(--mono); color: #b4a8c4; }
+.director-runs > summary { font-size: 12px; }
+
+@media (max-width: 600px) {
+  .director-panel { padding: 18px 16px; }
+  .director-budgets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .director-config { display: grid; gap: 6px; }
+  .director-recap { padding: 12px; }
+}
