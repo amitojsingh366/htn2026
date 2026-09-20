@@ -349,6 +349,84 @@ describe("Worker routes", () => {
     expect(otherState.game_started).toBe(true);
   });
 
+  it("supports open WebSockets for ESP devices with live role push and bidirectional messaging", async () => {
+    // 1. ESP 1 connects via open WebSocket
+    const wsRes1 = await SELF.fetch("https://example.com/api/v1/games/esp-ws/ws/device?device_id=esp-1", {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(wsRes1.status).toBe(101);
+    const ws1 = wsRes1.webSocket!;
+    const messages1: any[] = [];
+    ws1.accept();
+    ws1.addEventListener("message", (e) => messages1.push(JSON.parse(e.data as string)));
+
+    // 2. ESP 2 connects via open WebSocket
+    const wsRes2 = await SELF.fetch("https://example.com/api/v1/games/esp-ws/ws/device?device_id=esp-2", {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(wsRes2.status).toBe(101);
+    const ws2 = wsRes2.webSocket!;
+    const messages2: any[] = [];
+    ws2.accept();
+    ws2.addEventListener("message", (e) => messages2.push(JSON.parse(e.data as string)));
+
+    // Both should receive init messages
+    await vi.waitFor(() => {
+      expect(messages1).toHaveLength(1);
+      expect(messages2).toHaveLength(1);
+    });
+    expect(messages1[0]).toMatchObject({ type: "init", device_id: "esp-1", role: "not infected", is_infected: false });
+    expect(messages2[0]).toMatchObject({ type: "init", device_id: "esp-2", role: "not infected", is_infected: false });
+
+    // 3. Frontend clicks Start Game
+    const startRes = await SELF.fetch("https://example.com/api/v1/games/esp-ws/start-game", { method: "POST" });
+    expect(startRes.status).toBe(200);
+    const startData = await startRes.json<{ patient_zero_id: string }>();
+
+    // Both devices should receive role_assignment pushed over their open sockets
+    await vi.waitFor(() => {
+      expect(messages1.length).toBeGreaterThanOrEqual(2);
+      expect(messages2.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const roleMsg1 = messages1.find((m) => m.type === "role_assignment");
+    const roleMsg2 = messages2.find((m) => m.type === "role_assignment");
+    expect(roleMsg1).toBeDefined();
+    expect(roleMsg2).toBeDefined();
+
+    if (startData.patient_zero_id === "esp-1") {
+      expect(roleMsg1.role).toBe("infected");
+      expect(roleMsg1.is_infected).toBe(true);
+      expect(roleMsg2.role).toBe("not infected");
+      expect(roleMsg2.is_infected).toBe(false);
+    } else {
+      expect(roleMsg2.role).toBe("infected");
+      expect(roleMsg2.is_infected).toBe(true);
+      expect(roleMsg1.role).toBe("not infected");
+      expect(roleMsg1.is_infected).toBe(false);
+    }
+
+    // 4. The healthy device reports getting infected by sending a message over its open WebSocket
+    const healthyWs = startData.patient_zero_id === "esp-1" ? ws2 : ws1;
+    healthyWs.send(JSON.stringify({
+      type: "event",
+      current_state: "infected",
+      timestamp: 25000,
+    }));
+
+    // Should receive event_ack and game_over on sockets
+    await vi.waitFor(() => {
+      expect(messages1.some((m) => m.type === "game_over")).toBe(true);
+      expect(messages2.some((m) => m.type === "game_over")).toBe(true);
+    });
+
+    const gameOver1 = messages1.find((m) => m.type === "game_over");
+    expect(gameOver1.rankings).toHaveLength(2);
+
+    ws1.close();
+    ws2.close();
+  });
+
   it("404s an unknown route", async () => {
     const res = await SELF.fetch("https://example.com/nope");
     expect(res.status).toBe(404);

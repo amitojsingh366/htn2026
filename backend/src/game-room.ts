@@ -246,6 +246,7 @@ export class GameRoom extends DurableObject<Env> {
     );
 
     const state = this.broadcastState();
+    this.broadcastRolesToDevices();
 
     return {
       message: patientZeroId
@@ -435,35 +436,174 @@ export class GameRoom extends DurableObject<Env> {
     return this.broadcastState();
   }
 
-  /** WebSocket upgrade. Everything else is RPC. */
+  broadcastRolesToDevices(): void {
+    for (const ws of this.ctx.getWebSockets("device")) {
+      try {
+        const att = ws.deserializeAttachment() as { device_id?: string } | null;
+        const id = att?.device_id;
+        if (id) {
+          const dev = this.getDeviceState(id);
+          ws.send(
+            JSON.stringify({
+              type: "role_assignment",
+              ...dev,
+            }),
+          );
+        }
+      } catch {}
+    }
+  }
+
+  broadcastGameOverToDevices(): void {
+    const rankings = this.calculateRankings();
+    for (const ws of this.ctx.getWebSockets("device")) {
+      try {
+        const att = ws.deserializeAttachment() as { device_id?: string } | null;
+        const devId = att?.device_id;
+        const myRank = devId ? rankings.find((r) => r.device_id === devId) : null;
+        ws.send(
+          JSON.stringify({
+            type: "game_over",
+            device_id: devId,
+            rank: myRank?.rank,
+            survival_time_seconds: myRank?.survival_time_seconds,
+            rankings,
+          }),
+        );
+      } catch {}
+    }
+  }
+
+  /** WebSocket upgrade. Supports both dashboard clients and ESP devices. */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
+    const url = new URL(request.url);
+    const deviceIdParam = (url.searchParams.get("device_id") || url.searchParams.get("deviceId") || "").trim();
+    const isDevice = url.pathname.includes("/ws/device") || url.pathname.includes("/ws/esp") || Boolean(deviceIdParam);
+
     const [client, server] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(server);
-    server.send(JSON.stringify(this.getState()));
+
+    if (isDevice) {
+      const tags = deviceIdParam ? ["device", `device:${deviceIdParam}`] : ["device"];
+      this.ctx.acceptWebSocket(server, tags);
+      server.serializeAttachment({ device_id: deviceIdParam, is_device: true });
+
+      if (deviceIdParam) {
+        // Auto-register device in players table if not yet present
+        const existing = Array.from(
+          this.ctx.storage.sql.exec<PlayerRow>(
+            "SELECT device_id, state, joined_at, infected_at FROM players WHERE device_id = ?",
+            deviceIdParam,
+          ),
+        );
+
+        if (existing.length === 0) {
+          this.ctx.storage.sql.exec(
+            "INSERT INTO players (device_id, state, joined_at, infected_at) VALUES (?, 'not infected', ?, NULL)",
+            deviceIdParam,
+            Date.now(),
+          );
+
+          // Sync population table
+          const counts = this.ctx.storage.sql
+            .exec<{ total: number; infected: number }>(`
+              SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN state = 'infected' THEN 1 ELSE 0 END), 0) as infected FROM players
+            `)
+            .one();
+
+          this.ctx.storage.sql.exec(
+            "UPDATE population SET num_players = ?, num_infected = ? WHERE id = 1",
+            counts.total,
+            counts.infected,
+          );
+
+          this.broadcastState();
+        }
+
+        const devState = this.getDeviceState(deviceIdParam);
+        server.send(
+          JSON.stringify({
+            type: "init",
+            ...devState,
+          }),
+        );
+      } else {
+        server.send(
+          JSON.stringify({
+            type: "connected",
+            message: "ESP WebSocket connected. Send { \"device_id\": \"...\" } to register.",
+          }),
+        );
+      }
+    } else {
+      this.ctx.acceptWebSocket(server, ["dashboard"]);
+      server.serializeAttachment({ is_device: false });
+      server.send(JSON.stringify(this.getState()));
+    }
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
   /**
-   * Clients only need to hold the socket open; a message is treated as a
-   * request for the current state. If a message contains { device_id },
-   * it returns state plus that device's role.
+   * Handles incoming frames from both dashboard clients and ESP devices.
+   * If a device sends telemetry over WebSocket, records event and replies with event_ack.
    */
   override async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     try {
       if (typeof message === "string") {
         const parsed = JSON.parse(message);
-        if (parsed.device_id) {
-          const devState = this.getDeviceState(parsed.device_id);
-          ws.send(JSON.stringify({ ...this.getState(), device: devState }));
+        let att = (ws.deserializeAttachment() as { device_id?: string; is_device?: boolean } | null) || {};
+        const deviceId = (parsed.device_id || parsed.deviceId || att.device_id || "").trim();
+
+        if (parsed.device_id && !att.device_id) {
+          att = { ...att, device_id: parsed.device_id, is_device: true };
+          ws.serializeAttachment(att);
+        }
+
+        // If ESP reports state / event over WebSocket
+        if (parsed.current_state !== undefined || parsed.state !== undefined || parsed.type === "event") {
+          if (!deviceId) {
+            ws.send(JSON.stringify({ type: "error", error: "device_id is required" }));
+            return;
+          }
+
+          const res = this.recordDeviceEvent({
+            device_id: deviceId,
+            timestamp: parsed.timestamp ?? parsed.time_stamp ?? Date.now(),
+            current_state: parsed.current_state ?? parsed.state,
+          });
+
+          const devState = this.getDeviceState(deviceId);
+          ws.send(
+            JSON.stringify({
+              type: "event_ack",
+              ...devState,
+            }),
+          );
+
+          if (res.game_over) {
+            this.broadcastGameOverToDevices();
+          }
+          return;
+        }
+
+        // If ESP requests current role / state
+        if (deviceId) {
+          const devState = this.getDeviceState(deviceId);
+          ws.send(
+            JSON.stringify({
+              type: "device_state",
+              ...devState,
+            }),
+          );
           return;
         }
       }
     } catch {}
+
     ws.send(JSON.stringify(this.getState()));
   }
 
@@ -483,10 +623,17 @@ export class GameRoom extends DurableObject<Env> {
 
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(payload);
+        const att = ws.deserializeAttachment() as { is_device?: boolean } | null;
+        if (!att?.is_device) {
+          ws.send(payload);
+        }
       } catch {
         // Socket died between getWebSockets() and send(); the close handler cleans up.
       }
+    }
+
+    if (state.game_over) {
+      this.broadcastGameOverToDevices();
     }
 
     return state;

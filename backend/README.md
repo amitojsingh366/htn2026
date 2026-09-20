@@ -35,6 +35,7 @@ GET  /api/v1/games/{game_id}/rankings
 POST /api/v1/games/{game_id}/add-infected
 GET  /api/v1/games/{game_id}/population-state
 WS   /api/v1/games/{game_id}/ws/population
+WS   /api/v1/games/{game_id}/ws/device?device_id={device_id}
 ```
 
 Adding the real `plan.md` endpoints (`/gateway/sync`, `/registrations`, `/rounds`)
@@ -43,11 +44,16 @@ per-game routing is already in place.
 
 ## WebSockets
 
-`/ws/population` upgrades to the Durable Object, which pushes the full state
-object on connect and again after every mutation. It uses the hibernation API
-(`ctx.acceptWebSocket`), so clients stay connected while the object sleeps and
-no duration is billed while idle. `ping` is auto-answered with `pong` without
-waking the object.
+1. **Dashboard WebSocket (`/ws/population`)**:
+   Pushes the full population state object on connect and after every mutation. It uses the hibernation API (`ctx.acceptWebSocket`), so clients stay connected while the object sleeps.
+
+2. **ESP Device WebSocket (`/ws/device?device_id={id}`)**:
+   Maintains an open bidirectional socket for ESP devices:
+   - On connect: Sends `{ "type": "init", "device_id": "...", "role": "not infected", "is_infected": false }`.
+   - On game start: Pushes `{ "type": "role_assignment", "role": "infected" | "not infected" }` immediately.
+   - Sending events: ESP sends `{ "type": "event", "current_state": "infected" }` over the socket; server replies with `{ "type": "event_ack" }`.
+   - On game over: Pushes `{ "type": "game_over", "rank": N, "survival_time_seconds": S, "rankings": [...] }`.
+   - Keepalive: `ping` is auto-answered with `pong` by the runtime without waking the object.
 
 Payload (unchanged from the FastAPI version):
 

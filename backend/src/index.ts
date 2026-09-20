@@ -41,7 +41,14 @@ export default {
     const stub = env.GAME_ROOM.getByName(gameId);
 
     // WebSocket upgrades are passed through to the Durable Object untouched.
-    if (route === "/ws/population" && request.headers.get("Upgrade") === "websocket") {
+    const isWebSocketRoute =
+      route === "/ws/population" ||
+      route === "/ws/device" ||
+      route === "/ws/esp" ||
+      route.startsWith("/ws/device/") ||
+      route.startsWith("/ws/esp/");
+
+    if (isWebSocketRoute && request.headers.get("Upgrade") === "websocket") {
       return stub.fetch(request);
     }
 
@@ -79,6 +86,12 @@ export default {
           return json({
             message: `This is a WebSocket endpoint. Connect with ws(s)://${url.host}${url.pathname}`,
             current_state: await stub.getState(),
+          });
+
+        case "/ws/device":
+        case "/ws/esp":
+          return json({
+            message: `This is an ESP WebSocket endpoint. Connect with ws(s)://${url.host}${url.pathname}?device_id=<your_device_id>`,
           });
       }
     }

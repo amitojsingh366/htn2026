@@ -1,114 +1,124 @@
-# Walkthrough — Start Game Flow, Patient Zero Assignment & ESP Role Delivery
+# Walkthrough — Open WebSocket Protocol for ESP Devices
 
-Added an interactive **"Start Game"** capability:
-- The frontend clicks **"🚀 Start Game (Pick Patient Zero)"**.
-- The backend initiates game timing, randomly selects one registered participant to become **Patient Zero** (`state = 'infected'`), and resets the other participants to healthy (`state = 'not infected'`).
-- The role assignment and timing are delivered to ESP devices via HTTP polling (`GET /device-state?device_id=...`), telemetry ingestion responses (`POST /device-event`), and real-time WebSocket push (`/ws/population`).
-- The frontend displays a live digital survival clock, patient zero alert, and survival leaderboard.
-
----
-
-## Changes Made
-
-### 1. Backend (`backend/`)
-
-- **[types.ts](file:///c:/Users/anton/code_and_projects/htn2026/backend/src/types.ts)**:
-  - Added `StartGameResponse` and `DeviceStateResponse`.
-  - Added `started_at?: number | null` and `patient_zero_id?: string | null` to `PopulationState`.
-
-- **[game-room.ts](file:///c:/Users/anton/code_and_projects/htn2026/backend/src/game-room.ts)**:
-  - Added `patient_zero_id TEXT` column to `game_meta` table in SQLite.
-  - Implemented `startGame(gameId)`:
-    - Sets `started_at = Date.now()`, `ended_at = NULL`, `game_over = 0`.
-    - Randomly picks one player from registered participants in the `players` table as Patient Zero.
-    - Sets that player's state to `'infected'` and all other players to `'not infected'`.
-    - Broadcasts the update to all connected WebSocket clients.
-  - Implemented `getDeviceState(deviceId)`:
-    - Returns `{ device_id, role, is_infected, game_started, started_at, game_over }`.
-  - Updated `recordDeviceEvent()`:
-    - Returns `assigned_role` and `is_infected` in the response payload.
-  - Updated `reset()`:
-    - Resets `patient_zero_id = NULL` and `started_at = NULL`.
-  - Updated `webSocketMessage()`:
-    - Supports device-specific queries `{ "device_id": "esp-01" }`.
-
-- **[index.ts](file:///c:/Users/anton/code_and_projects/htn2026/backend/src/index.ts)**:
-  - Added `POST /start-game` (and `/api/v1/games/:gameId/start-game`, alias `/game/start`).
-  - Added `GET /device-state` (and `/api/v1/games/:gameId/device-state`, supporting `?device_id=...`).
-
-- **[game-room.test.ts](file:///c:/Users/anton/code_and_projects/htn2026/backend/test/game-room.test.ts)**:
-  - Added tests for `startGame`, random patient zero selection, and `GET /device-state`.
+ESP devices can now maintain an **open, persistent WebSocket connection** to the backend Durable Object. This enables:
+1. **0ms Latency Role Delivery**: When the frontend clicks "Start Game", the randomly chosen Patient Zero role is immediately pushed down the open socket.
+2. **Real-Time Telemetry over WebSocket**: The ESP sends its infection state over the open socket without needing HTTP POST requests.
+3. **Instant Game Over & Rankings**: As soon as all players are infected, each ESP device receives its final rank, survival time, and full leaderboard over its open socket.
+4. **Hibernation & Auto Ping/Pong**: The Durable Object hibernates when idle, and `ping` frames are automatically answered with `pong` by the Cloudflare Workers runtime without waking the object or incurring billed CPU duration.
 
 ---
 
-### 2. Frontend (`frontend/`)
+## ESP WebSocket Specification
 
-- **[PopulationState.tsx](file:///c:/Users/anton/code_and_projects/htn2026/frontend/src/components/PopulationState.tsx)**:
-  - Extended `PopulationStateData` with `started_at`, `patient_zero_id`, `game_over`, and `rankings`.
-  - Connected `onUpdate` callback to dispatch these to the parent `App` component on both HTTP fetch and WebSocket stream frames.
+### 1. Connection URL
+```
+ws(s)://<backend-host>/ws/device?device_id=<your_device_id>
+```
+*(Or per-game: `ws(s)://<backend-host>/api/v1/games/<game_id>/ws/device?device_id=<your_device_id>`)*
 
-- **[App.tsx](file:///c:/Users/anton/code_and_projects/htn2026/frontend/src/App.tsx)**:
-  - Added **"🚀 Start Game (Pick Patient Zero)"** button.
-  - Added live ticking survival timer (`MM:SS`) synced with `started_at`.
-  - Added Patient Zero badge (`☣ esp-XX`).
-  - Added **Final Survival Leaderboard** rendered upon Game Over (`game_over: true`).
+### 2. Connection Handshake (`init`)
+Immediately upon connecting, the server auto-registers the device in the game roster and sends:
+```json
+{
+  "type": "init",
+  "device_id": "esp-01",
+  "role": "not infected",
+  "is_infected": false,
+  "game_started": false,
+  "started_at": null,
+  "game_over": false
+}
+```
 
-- **[App.css](file:///c:/Users/anton/code_and_projects/htn2026/frontend/src/App.css)**:
-  - Styled `.btn-start-game` with amber/crimson glowing gradient.
-  - Styled `.round-status-banner`, `.round-timer-value`, and `.leaderboard-table`.
+### 3. Role Assignment Push (`role_assignment`)
+When the frontend clicks **"🚀 Start Game"**, the server randomly selects one player as Patient Zero and pushes their new role to every connected ESP:
+```json
+// To the chosen Patient Zero ESP:
+{
+  "type": "role_assignment",
+  "device_id": "esp-01",
+  "role": "infected",
+  "is_infected": true,
+  "game_started": true,
+  "started_at": 1711000000000,
+  "game_over": false
+}
+
+// To all healthy ESPs:
+{
+  "type": "role_assignment",
+  "device_id": "esp-02",
+  "role": "not infected",
+  "is_infected": false,
+  "game_started": true,
+  "started_at": 1711000000000,
+  "game_over": false
+}
+```
+
+### 4. ESP Reports Getting Tagged / Infected (`event` -> `event_ack`)
+When the ESP player is tagged, the ESP sends a message over the open socket:
+```json
+{
+  "type": "event",
+  "current_state": "infected",
+  "timestamp": 12500
+}
+```
+The server updates the room state and immediately acknowledges:
+```json
+{
+  "type": "event_ack",
+  "device_id": "esp-02",
+  "role": "infected",
+  "is_infected": true,
+  "game_started": true,
+  "started_at": 1711000000000,
+  "game_over": false
+}
+```
+
+### 5. Game Over & Leaderboard Push (`game_over`)
+When all participants have been infected, the server pushes the final ranking to every connected ESP:
+```json
+{
+  "type": "game_over",
+  "device_id": "esp-02",
+  "rank": 1,
+  "survival_time_seconds": 29,
+  "rankings": [
+    {
+      "rank": 1,
+      "device_id": "esp-02",
+      "state": "infected",
+      "infected_at": 1711000029000,
+      "survival_time_seconds": 29
+    },
+    {
+      "rank": 2,
+      "device_id": "esp-01",
+      "state": "infected",
+      "infected_at": 1711000000000,
+      "survival_time_seconds": 0
+    }
+  ]
+}
+```
 
 ---
 
 ## Verification Results
 
-### Backend Automated Tests
+### Vitest Suite (15/15 Passed)
 ```bash
 npm test
 ```
 ```
-✓ test/game-room.test.ts (14 tests) 647ms
+✓ test/game-room.test.ts (15 tests) 988ms
 Test Files  1 passed (1)
-     Tests  14 passed (14)
+     Tests  15 passed (15)
 ```
 
-### TypeScript Validation
-```bash
-npm run typecheck # in backend
-npm run build     # in frontend
-```
-Both succeeded with 0 errors.
-
----
-
-## How the ESP Device Receives Its Role
-
-1. **Option A: HTTP Polling**
-   ```http
-   GET /device-state?device_id=esp-01
-   ```
-   **Response**:
-   ```json
-   {
-     "device_id": "esp-01",
-     "role": "infected",
-     "is_infected": true,
-     "game_started": true,
-     "started_at": 1711000000000,
-     "game_over": false
-   }
-   ```
-
-2. **Option B: Event Telemetry Response**
-   Whenever the device posts telemetry to `POST /device-event`, the response contains:
-   ```json
-   {
-     "message": "Device event recorded",
-     "assigned_role": "infected",
-     "is_infected": true,
-     "num_players": 4,
-     "num_infected": 1
-   }
-   ```
-
-3. **Option C: WebSocket Stream**
-   ESP devices connected to `ws://localhost:8787/ws/population` receive live broadcast updates with `patient_zero_id` as soon as the game begins.
+### Build & Typecheck
+- `npm run typecheck` in `backend` passed with 0 errors.
+- `npm run build` in `frontend` passed with 0 errors.
