@@ -44,3 +44,7 @@ jobs:
         run: sh firmware/tests/run_gateway_diagnostics.sh
       - name: Check badge announcement wire format
         run: sh firmware/tests/run-announcement-tests.sh
+      - name: Check badge channel discovery
+        run: sh firmware/tests/run-channel-tests.sh
+      - name: Check authenticated mesh discovery
+        run: sh firmware/tests/run-mesh-discovery-tests.sh

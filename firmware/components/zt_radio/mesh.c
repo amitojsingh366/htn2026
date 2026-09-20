@@ -474,6 +474,11 @@ static zt_err_t admissible(const zt_domain_message_t *m, const round_t *r)
     if (h->type == ZT_PKT_JOIN_RESULT || h->type == ZT_PKT_ROSTER_PAGE || h->type == ZT_PKT_HOST_STATE || h->type == ZT_PKT_COMMAND) return ZT_OK;
     if (h->type == ZT_PKT_BEACON && h->round_id == 0 && m->payload.beacon.phase == ZT_PHASE_LOBBY) return ZT_OK;
     if (h->type == ZT_PKT_SNAPSHOT_REQUEST && m->payload.snapshot_request.slot == ZT_SLOT_INVALID) return ZT_OK;
+    /* A client that missed the frozen roster must still discover the host's
+     * round channel. This direct beacon grants contact only; HMAC verification
+     * and the normal roster/PREPARE admission still follow. */
+    if ((!r || !r->complete) && h->type == ZT_PKT_BEACON && !h->hops &&
+        mac_equal(&h->origin, &cfg->host_mac)) return ZT_OK;
     if (!r || !r->complete) return ZT_ERR_STALE;
     int sender = origin_slot(r, &h->origin);
     if (sender < 0 && !authoritative(h->type)) return ZT_ERR_AUTH;
@@ -660,11 +665,18 @@ static zt_err_t deliver(zt_domain_message_t *m, uint64_t now)
     }
     default: break;
     }
-    if (cfg && (mac_equal(&m->header.origin, &cfg->host_mac) && (uint64_t)m->header.age_ms + (now >= m->rx_us ? (now - m->rx_us) / 1000 : UINT32_MAX) <= ZT_CLOCK_AGE_MAX_MS))
-        zt_radio_channel_discovered(m->channel, m->rx_us);
-    else if (m->header.type == ZT_PKT_BEACON && m->header.round_id == 0 &&
-        m->payload.beacon.phase == ZT_PHASE_LOBBY && m->payload.beacon.gateway_age_s < 10)
-        zt_radio_channel_discovered(m->channel, m->rx_us);
+    bool fresh = m->rx_us <= now &&
+        (uint64_t)m->header.age_ms + (now - m->rx_us) / 1000 <= ZT_CLOCK_AGE_MAX_MS;
+    bool from_host = cfg && mac_equal(&m->header.origin, &cfg->host_mac);
+    /* Adjacent-channel reception is not evidence that the host uses our RX
+     * channel. Only channel-bearing advertisements establish/renew the lease;
+     * JOIN_RESULT and other host traffic must not pin a client to its dwell. */
+    if (fresh && m->header.type == ZT_PKT_BEACON && (from_host ||
+        (!m->header.round_id && m->payload.beacon.phase == ZT_PHASE_LOBBY &&
+         m->payload.beacon.gateway_age_s < ZT_GATEWAY_DISCOVERY_MAX_AGE_S)))
+        zt_radio_channel_discovered(m->payload.beacon.round_channel, m->rx_us);
+    else if (fresh && from_host && m->header.type == ZT_PKT_HOST_STATE)
+        zt_radio_channel_discovered(m->payload.host_state.round_channel, m->rx_us);
     z = domain_sink ? domain_sink(m, domain_context) : ZT_ERR_INVALID_STATE;
     if (z == ZT_ERR_NO_SPACE) z = ZT_ERR_BUSY;
     if (z == ZT_OK && m->header.type == ZT_PKT_COMMAND)

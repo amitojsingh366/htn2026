@@ -316,8 +316,14 @@ static zt_err_t service_channel(uint64_t now)
     uint8_t observed_channel = discovery_observation.channel;
     discovery_observation.rx_us = 0;
     portEXIT_CRITICAL(&guard);
-    if (!host && !locked_round && !cancelling && observed_channel == status.channel &&
+    if (!host && !locked_round && !cancelling &&
         observed_us && observed_us <= now && now - observed_us <= ZT_CLOCK_AGE_MAX_MS * 1000ULL) {
+        /* RX metadata describes our listening channel, not the sender's.
+         * Follow the authenticated advertised channel before holding a lease. */
+        if (observed_channel != status.channel) {
+            zt_err_t r = select_channel(observed_channel);
+            if (r != ZT_OK) return r;
+        }
         lobby_seen_us = observed_us;
         status.state = ZT_CHANNEL_LOBBY;
     }
@@ -357,6 +363,9 @@ static zt_err_t service_channel(uint64_t now)
             ip_due = now + ZT_STA_IP_TIMEOUT_MS * 1000;
             break;
         case ZT_STA_HOME_CHANNEL_CHANGED:
+            /* Clients select their own channel synchronously. A queued event
+             * from an earlier discovery dwell must not undo that selection. */
+            if (!host) break;
             atomic_store_explicit(&operating_channel, event.channel, memory_order_relaxed);
             if (locked_round && event.channel != status.channel) cancel_operation(now, false);
             else if (!locked_round && is_allowed(event.channel)) status.channel = event.channel;
