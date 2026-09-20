@@ -1,3 +1,7 @@
+export type JsonScalar = string | number | boolean | null;
+/** Tool audit fields are deliberately shallow and bounded. */
+export type JsonValue = JsonScalar | JsonScalar[];
+
 /** Bounded authoritative input; never accepts observations from a public client. */
 export interface DirectorObservation {
   roomId: string;
@@ -39,8 +43,8 @@ export interface DirectorAction {
   at: number;
   roundId: string;
   tool: string;
-  arguments: Record<string, unknown>;
-  result: Record<string, unknown>;
+  arguments: Record<string, JsonValue>;
+  result: Record<string, JsonValue>;
 }
 export interface DirectorRecap {
   roundId: string;

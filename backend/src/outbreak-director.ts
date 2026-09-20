@@ -2,7 +2,7 @@ import { Agent, type Connection } from 'agents';
 import OpenAI from 'openai';
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
 import type { ResponseInput, ResponseFunctionToolCall } from 'openai/resources/responses/responses';
-import type { DirectorAction, DirectorObservation, DirectorRun, DirectorState, DirectorStatus } from './director-types';
+import type { DirectorAction, DirectorObservation, DirectorRun, DirectorState, DirectorStatus, JsonValue } from './director-types';
 import { cleanAnnouncement, groundedRecap, initialDirectorState, limits, MAX_HISTORY, MAX_REQUESTS_PER_RUN, meaningfulChange, observationKey } from './director-policy';
 import { DIRECTOR_INSTRUCTIONS, DIRECTOR_TOOLS } from './director-tools';
 
@@ -42,7 +42,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
 
   async getStatus(): Promise<DirectorStatus> {
     // Refresh transport receipts without invoking OpenAI or triggering a run.
-    const recent = this.state.actions.filter(a => a.tool === 'send_announcement' && a.result.status === 'queued').slice(-3);
+    const recent = this.state.actions.filter(a => a.tool === 'send_announcement' && (a.result.status === 'queued' || (a.result.status === 'started' && !this.state.activeRun))).slice(-3);
     for (const action of recent) {
       if (!this.state.latest) break;
       try {
@@ -136,7 +136,7 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     this.setState({ ...this.state, runs: this.state.runs.map(run => run.id === id ? { ...run, ...update } : run) });
   }
   private updateAction(id: string, result: Record<string, unknown>): void {
-    this.setState({ ...this.state, actions: this.state.actions.map(action => action.id === id ? { ...action, result } : action) });
+    this.setState({ ...this.state, actions: this.state.actions.map(action => action.id === id ? { ...action, result: JSON.parse(JSON.stringify(result)) as Record<string, JsonValue> } : action) });
   }
   private assertCurrent(runId: string, snapshot: DirectorObservation): void {
     if (this.state.activeRun?.id !== runId || Date.now() > this.state.activeRun.expiresAt ||
@@ -151,7 +151,8 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
       lastRunAt: now, status: 'thinking', reason: 'OpenAI is evaluating the current outbreak.', runs: [...this.state.runs, run].slice(-30) });
     try {
       const snapshot = await this.room().getDirectorObservation();
-      if (snapshot.roundId !== roundId) throw new StaleRun('Round changed before reasoning.');
+      if (snapshot.roundId !== roundId || this.state.latest?.roundId !== roundId ||
+        this.state.latest.revision > snapshot.revision || this.state.latest.observedAt > snapshot.observedAt) throw new StaleRun('Game changed before reasoning.');
       // Freshness is checked again at every tool boundary and in the gateway.
       this.setState({ ...this.state, latest: snapshot });
       const context = { trigger, game: snapshot,
@@ -210,12 +211,14 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
     const id = `${runId}:${call.call_id}`;
     const existing = this.state.actions.find(a => a.id === id);
     if (existing) return existing.result;
-    let args: Record<string, unknown>;
+    let args: Record<string, JsonValue>;
     try {
       if (call.arguments.length > 2048) throw new Error();
       const value: unknown = JSON.parse(call.arguments);
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
-      args = value as Record<string, unknown>;
+      const scalar = (v: unknown) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+      if (Object.values(value).some(v => !scalar(v) && !(Array.isArray(v) && v.every(scalar)))) throw new Error();
+      args = value as Record<string, JsonValue>;
     } catch { return { status: 'rejected', reason: 'Invalid tool arguments.' }; }
     this.assertCurrent(runId, snapshot);
     const action: DirectorAction = { id, at: Date.now(), roundId: snapshot.roundId!, tool: call.name, arguments: args,
@@ -237,6 +240,8 @@ export class OutbreakDirector extends Agent<Env, DirectorState> {
         if (fresh.endedAt || this.state.followUps.length >= 2) throw new Error('Follow-up unavailable after round end or when queue is full.');
         const token = crypto.randomUUID();
         const scheduled = await this.schedule(delay, 'followUp', { id: token, roundId: snapshot.roundId!, reason: args.reason }, { idempotent: true, retry: { maxAttempts: 1 } });
+        try { this.assertCurrent(runId, snapshot); }
+        catch (error) { await this.cancelSchedule(scheduled.id); throw error; }
         // The payload token and schedule cancellation ID are deliberately distinct.
         this.setState({ ...this.state, followUps: [...this.state.followUps, { id: scheduled.id, token, roundId: snapshot.roundId!, dueAt: Date.now() + delay * 1000, reason: args.reason }] });
         result = { status: 'scheduled', scheduleId: scheduled.id, dueAt: Date.now() + delay * 1000 };
