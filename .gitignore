@@ -50,6 +50,8 @@ dist-ssr/
 .env
 .env.*
 !.env.example
+# Public browser build settings only; never put auth tokens in this file.
+!frontend/.env.production
 
 # IDEs & Editors
 .vscode/

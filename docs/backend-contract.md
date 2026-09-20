@@ -169,6 +169,30 @@ destructive `RESET_GAME` operation.
 | `ack` | `applied`, `decision_applied`, `ready`, `round_closed`, `presence` arrays | ≤8 entries per array, ≤4,096 bytes |
 | `need` | `snapshot_page:{snapshot_id,page_index}` or `events:[event_id,…]` | ≤8 event IDs |
 | `time_sync` | `nonce` u32 | at most one outstanding |
+| `diagnostics` | Host-local cumulative counters, uptime and heap/stack health | Optional negotiated extension; firmware ≤1,024 bytes and ≥60 seconds between attempts; no reply |
+
+The Sentry integration adds optional `diagnostics:true` to `welcome` when backend
+telemetry is configured. Its absence or `false` disables diagnostic sends, so a
+new host works with an older backend. Ordinary badges never originate or relay
+diagnostics. The host uses its existing WSS connection only, after gameplay,
+clock, registration, command, receipt and snapshot work.
+
+A diagnostic carries the common envelope plus `round_id` (null in a lobby),
+`host_boot`, eight-character `fw`, monotonic `seq`, `uptime_ms`, `reconnects`,
+`failures`, `dropped_messages`, `send_failures`, `heap_free_bytes`,
+`heap_min_free_bytes`, `heap_largest_free_bytes`, `gateway_stack_free_bytes`,
+`websocket_stack_free_bytes`, and numeric `last_error`. Counters saturate at u32;
+uptime is a safe JSON integer. Stack/heap values are bytes (ESP-IDF stack high-water
+marks), and a zero WebSocket stack minimum means it is not yet available.
+Reconnects count successful connections after the initial one within the same boot.
+
+The backend validates the welcomed session, matching boot/round, field types,
+message size, and sequence, and applies a persisted 30-second minimum interval.
+Only allowlisted health fields and backend correlation tags become a Sentry log.
+Rejected diagnostic samples within the generic 4,096-byte protocol bound are
+silently dropped. They produce no receipts, game-state broadcasts, commands,
+retry queue, or mesh traffic. See [Sentry operations](sentry.md) for budgets and
+demonstration steps.
 
 The `events` object is unchanged from the polling design:
 

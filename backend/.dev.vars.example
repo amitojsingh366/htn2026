@@ -3,5 +3,7 @@
 ZT_GATEWAY_TOKEN=
 ZT_HOST_MAC=
 # Optional: absence disables model execution. Never prefix this with VITE_.
+# For local OpenAI use, also declare OPENAI_API_KEY in secrets.required in your
+# private local Wrangler config; otherwise Wrangler ignores this local entry.
 OPENAI_API_KEY=
 # Nonsecret enable/model/budget settings are in wrangler.jsonc.

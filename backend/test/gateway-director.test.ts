@@ -1,9 +1,11 @@
-import { env, runInDurableObject, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentByName } from "agents";
 import { HostGateway } from "../src/gateway";
 import type { GameRoom } from "../src/game-room";
 import { initialDirectorState } from "../src/director-policy";
+import { GameTelemetry } from "../src/telemetry";
 import type { AnnouncementRequest } from "../src/director-types";
 
 const GAME = "director-gateway-test";
@@ -30,7 +32,10 @@ async function withGateway(name: string, exercise: (fixture: Fixture) => void | 
     pair[1].serializeAttachment({ is_gateway: true, gameId: GAME, welcomed: true, lastClientId: 0, lastSeenAt: now });
     const messages: Array<Record<string, unknown>> = [];
     pair[0].addEventListener("message", event => { messages.push(JSON.parse(String(event.data))); });
-    const gateway = new HostGateway(state, { ...env, DIRECTOR_ENABLED: "true", DIRECTOR_GAME_ID: GAME }, () => {});
+    const gatewayEnv = { ...env, DIRECTOR_ENABLED: "true", DIRECTOR_GAME_ID: GAME };
+    const telemetry = new GameTelemetry(state, gatewayEnv);
+    telemetry.initialize();
+    const gateway = new HostGateway(state, gatewayEnv, () => {}, telemetry);
     const request = { actionId: "run:1:call:1", roundId: ROUND, revision: 7, text: "Two survivors remain. Stay alert!", expiresAt: now + 60_000 };
     try { await exercise({ instance, gateway, state, socket: pair[1], now, request, messages }); }
     finally { pair[0].close(); pair[1].close(); }
@@ -65,7 +70,10 @@ describe("Director gateway integration", () => {
       expect(queued).toMatchObject({ status: "queued", commandSeq: 2, acknowledged: [] });
       const command = JSON.parse(state.storage.sql.exec<{body:string}>("SELECT body FROM gateway_commands WHERE seq=2").one().body).commands[0];
       expect(command).toMatchObject({ type: "ANNOUNCE", text: request.text, target: 255, round_id: ROUND, valid_until_elapsed_ms: request.expiresAt - (now - 100_000) });
-      const recovered = new HostGateway(state, { ...env, DIRECTOR_ENABLED: "true", DIRECTOR_GAME_ID: GAME }, () => {});
+      const gatewayEnv = { ...env, DIRECTOR_ENABLED: "true", DIRECTOR_GAME_ID: GAME };
+      const telemetry = new GameTelemetry(state, gatewayEnv);
+      telemetry.initialize();
+      const recovered = new HostGateway(state, gatewayEnv, () => {}, telemetry);
       expect(recovered.sendDirectorAnnouncement(request)).toMatchObject({ status: "duplicate", commandSeq: 2 });
       expect(recovered.sendDirectorAnnouncement({ ...request, text: "Different" })).toMatchObject({ status: "rejected", reason: "Action identity reused with different content" });
       expect(state.storage.sql.exec<{count:number}>("SELECT COUNT(*) AS count FROM gateway_commands").one().count).toBe(1);
@@ -154,9 +162,9 @@ describe("Director gateway integration", () => {
 
   it("does not expose public agent mutation, tool or model trigger routes", async () => {
     for (const path of ["/agents/outbreak-director/arbitrary", "/api/v1/games/test/director/observe", "/api/v1/games/test/director"]) {
-      expect((await SELF.fetch(`https://example.com${path}`, { method: "POST", body: "{}" })).status).toBe(404);
+      expect((await exports.default.fetch(`https://example.com${path}`, { method: "POST", body: "{}" })).status).toBe(404);
     }
-    const response = await SELF.fetch("https://example.com/api/v1/games/unconfigured/director");
+    const response = await exports.default.fetch("https://example.com/api/v1/games/unconfigured/director");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ enabled: false, status: "disabled" });
   });

@@ -1,3 +1,9 @@
+# LIVEG012 integration — current work
+
+All three requested branches are merged on main; see [the integrated release guide](docs/integrated-release.md).
+The 2026-09-20 request explicitly authorizes validation, deployment and a new firmware build.
+Earlier no-test and pending-deployment notes below are historical. Hardware flashing remains with the user.
+
 # LIVEG011 branch — nonblocking sync and shared demo countdown
 
 Current work is on `codex/firmware-sync-recovery`, based on main `62c4dab`, in

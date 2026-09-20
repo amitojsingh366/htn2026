@@ -1,8 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { getAgentByName } from "agents";
-import { HostGateway } from "./gateway";
 import type { AnnouncementRequest, AnnouncementResult, DirectorObservation, DirectorStatus } from "./director-types";
 import { initialDirectorState, limits } from "./director-policy";
+import { Sentry, GameTelemetry, sentryOptions, setAction, setGame, stateTrace, reportFailure } from "./telemetry";
+import { HostGateway, GatewayError } from "./gateway";
 import type {
   DeviceEventInput,
   DeviceStateResponse,
@@ -35,13 +36,16 @@ interface GameMetaRow extends Record<string, SqlStorageValue> {
  * One instance per game id. Owns that game's population counters, player list,
  * leaderboard, and every dashboard WebSocket watching it.
  */
-export class GameRoom extends DurableObject<Env> {
+class GameRoomBase extends DurableObject<Env> {
+  private telemetry: GameTelemetry;
   private gateway: HostGateway;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.gateway = new HostGateway(ctx, env, () => { this.broadcastState(); });
+    this.telemetry = new GameTelemetry(ctx, env);
+    this.gateway = new HostGateway(ctx, env, () => { this.broadcastState(); }, this.telemetry);
 
     ctx.blockConcurrencyWhile(async () => {
+      this.telemetry.initialize();
       this.gateway.initialize();
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS population (
@@ -193,7 +197,12 @@ export class GameRoom extends DurableObject<Env> {
     };
   }
 
-  getState(): PopulationState {
+  getState(correlation?: string): PopulationState {
+    setAction(correlation);
+    return Sentry.startSpan({ name: "game.state.sync", op: "game.state.sync" }, () => this.readState());
+  }
+
+  private readState(): PopulationState {
     const row = this.ctx.storage.sql
       .exec<PopulationRow>("SELECT num_players, num_infected FROM population WHERE id = 1")
       .one();
@@ -228,7 +237,12 @@ export class GameRoom extends DurableObject<Env> {
     return state;
   }
 
-  async startGame(gameId = "default"): Promise<StartGameResponse | Record<string, unknown>> {
+  async startGame(gameId = "default", correlation?: string): Promise<StartGameResponse | Record<string, unknown>> {
+    setAction(correlation); setGame(gameId);
+    return Sentry.startSpan({ name: "game.round.prepare", op: "game.round.prepare" }, () => this.startGameImpl(gameId));
+  }
+
+  private async startGameImpl(gameId: string): Promise<StartGameResponse | Record<string, unknown>> {
     if (this.gateway.enabled()) return this.gateway.prepare(gameId);
     const now = Date.now();
 
@@ -338,11 +352,16 @@ export class GameRoom extends DurableObject<Env> {
     };
   }
 
-  recordDeviceEvent(payload: DeviceEventInput): PopulationState & { assigned_role: string; is_infected: boolean } {
+  recordDeviceEvent(payload: DeviceEventInput, correlation?: string): PopulationState & { assigned_role: string; is_infected: boolean } {
+    setAction(correlation);
+    return Sentry.startSpan({ name: "game.infection.process", op: "game.infection.process" }, () => this.recordDeviceEventImpl(payload));
+  }
+
+  private recordDeviceEventImpl(payload: DeviceEventInput): PopulationState & { assigned_role: string; is_infected: boolean } {
     this.gateway.assertLegacyMutation();
     const deviceId = (payload.device_id ?? payload.deviceId ?? "").trim();
     if (!deviceId) {
-      throw new Error("device_id is required");
+      throw new GatewayError("INVALID_PAYLOAD", "device_id is required", 400);
     }
 
     const rawTs = payload.timestamp ?? payload.time_stamp ?? payload.time;
@@ -448,7 +467,8 @@ export class GameRoom extends DurableObject<Env> {
     };
   }
 
-  addPlayer(): PopulationState {
+  addPlayer(correlation?: string): PopulationState {
+    setAction(correlation);
     this.gateway.assertLegacyMutation();
     this.ctx.storage.sql.exec(
       "UPDATE population SET num_players = num_players + 1 WHERE id = 1",
@@ -457,7 +477,8 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   /** Infecting is capped at the roster size, matching the previous backend. */
-  addInfected(): PopulationState {
+  addInfected(correlation?: string): PopulationState {
+    setAction(correlation);
     this.gateway.assertLegacyMutation();
     this.ctx.storage.sql.exec(
       "UPDATE population SET num_infected = MIN(num_infected + 1, num_players) WHERE id = 1",
@@ -465,7 +486,8 @@ export class GameRoom extends DurableObject<Env> {
     return this.broadcastState();
   }
 
-  reset(): PopulationState {
+  reset(correlation?: string): PopulationState {
+    setAction(correlation);
     this.gateway.resetLobby();
     return this.broadcastState();
   }
@@ -510,6 +532,7 @@ export class GameRoom extends DurableObject<Env> {
 
   /** WebSocket upgrade. Supports both dashboard clients and ESP devices. */
   override async fetch(request: Request): Promise<Response> {
+    setAction(request.headers.get("x-action-id") ?? undefined);
     const gatewayMatch = new URL(request.url).pathname.match(/^\/api\/v1\/games\/([^/]+)(\/gateway\/(?:bootstrap|socket|control)|\/registrations)$/);
     if (gatewayMatch) return this.gateway.fetch(request, gatewayMatch[1], gatewayMatch[2]);
     if (request.headers.get("Upgrade") !== "websocket") {
@@ -578,9 +601,11 @@ export class GameRoom extends DurableObject<Env> {
     } else {
       this.ctx.acceptWebSocket(server, ["dashboard"]);
       server.serializeAttachment({ is_device: false });
-      server.send(JSON.stringify(this.getState()));
+      const state = this.getState();
+      server.send(JSON.stringify({ ...state, telemetry: stateTrace((state as PopulationState & { round_id?: string }).round_id) }));
     }
 
+    this.telemetry.log("connection.opened", { source: "durable_object", connection: isDevice ? "device" : "dashboard" });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -642,7 +667,9 @@ export class GameRoom extends DurableObject<Env> {
           return;
         }
       }
-    } catch {}
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) reportFailure(error);
+    }
 
     ws.send(JSON.stringify(this.getState()));
   }
@@ -652,8 +679,8 @@ export class GameRoom extends DurableObject<Env> {
     code: number,
     reason: string,
   ): Promise<void> {
-    // Missing close status and abnormal disconnect are runtime-only codes;
-    // neither may be sent back to the peer during host cleanup.
+    this.telemetry.log("connection.closed", { close_code: code, source: "durable_object" });
+    // Absent-status (1005) and abnormal-closure (1006) codes cannot be sent back.
     const attachment = ws.deserializeAttachment() as { is_gateway?: boolean; welcomed?: boolean } | null;
     if (attachment?.is_gateway) {
       ws.serializeAttachment({ ...attachment, welcomed: false });
@@ -662,22 +689,31 @@ export class GameRoom extends DurableObject<Env> {
     ws.close(code === 1005 || code === 1006 ? 1000 : code, reason);
   }
 
+  override async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
+    // instrumentDurableObjectWithSentry captures the runtime-provided error.
+    this.telemetry.log("backend.failure", { source: "durable_object" }, "error");
+  }
+
   /** Persist first, then push: storage is written before this is called. */
   private broadcastState(): PopulationState {
     const state = this.getState();
-    const payload = JSON.stringify(state);
+    const payload = JSON.stringify({ ...state, telemetry: stateTrace((state as PopulationState & { round_id?: string }).round_id) });
 
-    for (const ws of this.ctx.getWebSockets("dashboard")) {
+    let failures = 0;
+    const dashboards = this.ctx.getWebSockets("dashboard");
+    for (const ws of dashboards) {
       try {
         const att = ws.deserializeAttachment() as { is_device?: boolean } | null;
         if (!att?.is_device) {
           ws.send(payload);
         }
       } catch {
+        failures++;
         // Socket died between getWebSockets() and send(); the close handler cleans up.
       }
     }
 
+    if (dashboards.length) this.telemetry.log("game.state_synced", { recipients: dashboards.length, failures, players: state.num_players, infected: state.num_infected });
     if (state.game_over) {
       this.broadcastGameOverToDevices();
     }
@@ -699,3 +735,6 @@ export class GameRoom extends DurableObject<Env> {
     return state;
   }
 }
+
+export const GameRoom = Sentry.instrumentDurableObjectWithSentry(sentryOptions, GameRoomBase);
+export type GameRoom = GameRoomBase;

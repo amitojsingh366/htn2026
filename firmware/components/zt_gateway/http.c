@@ -22,6 +22,7 @@ static void activity_end(zt_err_t result)
     zt_gw->status.activity=ZT_GATEWAY_ACTIVITY_IDLE;
     zt_gw->status.last_error=result;
     if (result==ZT_OK) zt_gw->status.last_http_success_us=now;
+    else gw_record_failure_locked(zt_gw,result);
     portEXIT_CRITICAL(&zt_gw->guard);
 }
 

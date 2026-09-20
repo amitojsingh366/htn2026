@@ -1,4 +1,5 @@
-import { env, runInDurableObject } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { getAgentByName } from 'agents';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectorObservation } from '../src/director-types';

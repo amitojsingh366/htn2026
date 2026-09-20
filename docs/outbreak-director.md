@@ -6,11 +6,10 @@ Agents SDK owns durable memory and follow-up scheduling. The OpenAI Responses
 API supplies the model responses and function-call choices. Existing game code
 continues to own infection adjudication, roles, timing, scoring, and winners.
 
-**Implementation status:** no deployment, physical badge transmission test, or
-live OpenAI request was performed for this change. No real `OPENAI_API_KEY` was
-available. Automated tests with controlled API replies demonstrate code paths,
-not actual provider usage. The live acceptance steps below remain for the
-operator after review and deployment.
+**Release status:** the director is integrated with firmware recovery and Sentry in
+LIVEG012. See [the integrated release guide](integrated-release.md) for deployment,
+validation, and flashing instructions. Automated tests use controlled API replies;
+physical badge delivery still requires the operator to flash and verify the fleet.
 
 ## Architecture and boundaries
 
@@ -62,7 +61,7 @@ prompt, or tool-execution route.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `DIRECTOR_ENABLED` | `"false"` | Set exactly `"true"` when ready to enable the feature. |
+| `DIRECTOR_ENABLED` | `"true"` | Enabled for the integrated production release; set `"false"` to disable model calls. |
 | `DIRECTOR_GAME_ID` | `"005a544d454d4f01"` | Only this game can trigger model calls. Match the provisioned badge game and dashboard API URL. |
 | `OPENAI_MODEL` | `"gpt-4.1-mini"` | Configurable Responses API model; must support function calling. |
 | `DIRECTOR_DAILY_REQUEST_LIMIT` | `"60"` | Requests per UTC day for this director; clamped to 1–200. |
@@ -83,8 +82,11 @@ UI or, from `backend`, the interactive command below when preparing deployment:
 npx wrangler secret put OPENAI_API_KEY
 ```
 
-For local development, place the key only in ignored `backend/.dev.vars` or the
-local server's secret configuration. Missing keys leave the director disabled;
+For local development with OpenAI, include `OPENAI_API_KEY` in the
+`secrets.required` list of your private local Wrangler config, then place the key
+only in ignored `backend/.dev.vars`. Wrangler filters local secret files to the
+declared secret names; the production config keeps this key optional so gameplay
+can deploy without AI. Missing keys leave the director disabled;
 they do not prevent gameplay. Follow Cloudflare's [secret configuration guide](https://developers.cloudflare.com/workers/configuration/secrets/).
 Never put the key in `wrangler.jsonc`, a `VITE_*` variable, dashboard storage,
 badge provisioning, command text, or a screenshot. The browser receives only a

@@ -11,14 +11,15 @@
     "cf-typegen": "wrangler types --strict-vars=false"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@types/node": "^26.6.2",
     "typescript": "~6.0.2",
     "vitest": "^4.1.11",
-    "wrangler": "^4.101.0"
+    "wrangler": "^4.101.0",
+    "@cloudflare/vitest-plugin": "^1.1.13"
   },
   "dependencies": {
     "agents": "^0.24.0",
-    "openai": "^7.20.0"
+    "openai": "^7.20.0",
+    "@sentry/cloudflare": "^10.75.0"
   }
 }

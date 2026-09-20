@@ -28,6 +28,7 @@ zt_err_t zt_gateway_init(const zt_config_t *config,const zt_gateway_sinks_t *sin
     if (!g) return ZT_ERR_NO_SPACE;
     g->guard=(portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     g->game=config->game_id; g->host=config->host_mac; g->sinks=*sinks;
+    g->diagnostics_due=esp_timer_get_time()+ZT_GATEWAY_DIAGNOSTICS_INTERVAL_MS*1000ULL;
     memcpy(g->origin,config->https_base,n); memcpy(g->token,config->token,token_len+1);
     zt_gw=g;
     return ZT_OK;
@@ -49,7 +50,7 @@ void gw_backoff(uint64_t now)
     if (g->backoff+1<ZT_GATEWAY_BACKOFF_COUNT) ++g->backoff;
     uint64_t due=now+(delay-delay/5+esp_random()%(2*(delay/5)+1))*1000ULL;
     if (due>g->retry_us) g->retry_us=due;
-    ++g->status.reconnect_count;
+    gw_counter_increment(&g->status.reconnect_count);
 }
 void gw_anchor(uint64_t server_ms,uint64_t sent_us,uint64_t received_us)
 {
@@ -81,6 +82,7 @@ zt_err_t gw_send(zt_gateway_message_t *message)
     message->envelope.ts=(uint64_t)time(NULL)*1000;
     zt_err_t r=zt_gateway_encode(message,g->scratch.tx,sizeof(g->scratch.tx),&written);
     if (r==ZT_OK) r=zt_gateway_ws_send((uint8_t *)g->scratch.tx,written);
+    else gw_record_failure(r);
     if (r==ZT_OK) {
         g->response_pending=1; g->response_due=now+1000000ULL;
         g->send_due=now+100000ULL;
@@ -294,6 +296,7 @@ zt_err_t zt_gateway_bridge_publish(const zt_gateway_message_t *verified)
         }
         portEXIT_CRITICAL(&g->guard);
         g->status.welcomed=1; g->backoff=0; g->retry_us=0; g->status.last_error=ZT_OK;
+        g->diagnostics_enabled=w->diagnostics;
         g->join_burst=0; g->join_resume_us=now+500000ULL;
         g->round=w->round_id; g->snapshot_id=w->snapshot_id; g->snapshot_pages=w->snapshot_pages;
         g->resetting=w->resetting;
@@ -752,6 +755,7 @@ zt_err_t zt_gateway_service(uint64_t now)
     portENTER_CRITICAL(&g->guard); link=g->status; portEXIT_CRITICAL(&g->guard);
     if (g->disconnected_event || g->overflow_event || (g->ws && link.connected && now>=link.last_inbound_us &&
         now-link.last_inbound_us>ZT_GATEWAY_STALE_LINK_MS*1000ULL)) {
+        if (!g->disconnected_event && !g->overflow_event) gw_record_failure(ZT_ERR_TIMEOUT);
         gw_ws_destroy(); g->close_code=0; gw_backoff(now);
     }
     if (g->rx.ready && g->ws) {
@@ -767,7 +771,11 @@ zt_err_t zt_gateway_service(uint64_t now)
             if (more) next_empty_ack_us=now+100000ULL;
         }
         if (r!=ZT_OK && r!=ZT_ERR_BUSY && r!=ZT_ERR_NOT_IMPLEMENTED && r!=ZT_ERR_STALE) {
-            g->status.last_error=r; ++g->rx.dropped_messages;
+            g->status.last_error=r;
+            portENTER_CRITICAL(&g->guard);
+            gw_counter_increment(&g->rx.dropped_messages);
+            gw_record_failure_locked(g,r);
+            portEXIT_CRITICAL(&g->guard);
         }
     }
     commands_service(now);
@@ -789,7 +797,7 @@ zt_err_t zt_gateway_service(uint64_t now)
         }
         zt_gateway_hello_t hello; hello_build(&hello);
         zt_err_t r=zt_gateway_ws_open(&hello);
-        if (r!=ZT_OK) { g->status.last_error=r; gw_backoff(esp_timer_get_time()); }
+        if (r!=ZT_OK) { g->status.last_error=r; gw_record_failure(r); gw_backoff(esp_timer_get_time()); }
         return r;
     }
     if (!g->status.connected) return ZT_OK;
@@ -800,7 +808,7 @@ zt_err_t zt_gateway_service(uint64_t now)
         return r;
     }
     if (!g->status.welcomed) {
-        if (now-g->hello_us>5000000ULL) { gw_ws_destroy(); gw_backoff(now); }
+        if (now-g->hello_us>5000000ULL) { gw_record_failure(ZT_ERR_TIMEOUT); gw_ws_destroy(); gw_backoff(now); }
         return ZT_OK;
     }
     if (now<g->send_due || (g->response_pending && now<g->response_due)) return ZT_OK;
@@ -831,6 +839,7 @@ zt_err_t zt_gateway_service(uint64_t now)
     if (g->events_first && events_service(now)) g->events_first=0;
     else if (acknowledgments_service(now)) g->events_first=1;
     else if (events_service(now)) g->events_first=0;
+    else gw_diagnostics_service(now);
     return ZT_OK;
 }
 zt_err_t zt_gateway_mark_applied(zt_round_id_t round_id,uint32_t server_id)

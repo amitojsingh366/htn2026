@@ -47,11 +47,15 @@
     "nodejs_compat"
   ],
   "vars": {
-    "DIRECTOR_ENABLED": "false",
+    "DIRECTOR_ENABLED": "true",
     "DIRECTOR_GAME_ID": "005a544d454d4f01",
     "OPENAI_MODEL": "gpt-4.1-mini",
     "DIRECTOR_DAILY_REQUEST_LIMIT": "60",
     "DIRECTOR_ROUND_REQUEST_LIMIT": "18",
-    "DIRECTOR_MAX_OUTPUT_TOKENS": "600"
+    "DIRECTOR_MAX_OUTPUT_TOKENS": "600",
+    "SENTRY_DSN": "https://df4a7292a5f027e5c521ae8cfd527dbf@o4512118072541184.ingest.us.sentry.io/4512118101966848",
+    "SENTRY_ENVIRONMENT": "production",
+    "SENTRY_RELEASE": "zombie-tag@LIVEG012",
+    "SENTRY_TRACES_SAMPLE_RATE": "0.1"
   }
 }

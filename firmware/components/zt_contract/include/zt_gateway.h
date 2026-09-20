@@ -41,6 +41,11 @@ extern "C" {
 #define ZT_GATEWAY_CLOCK_INTERVAL_MS 30000
 #define ZT_GATEWAY_NETWORK_TIMEOUT_MS 5000
 #define ZT_GATEWAY_SEND_TIMEOUT_MS 200
+/* Optional host-local diagnostics use the existing WSS session only. They are
+ * best effort, never acknowledged/retried, and never enter any radio contract. */
+#define ZT_GATEWAY_DIAGNOSTICS_INTERVAL_MS 60000
+#define ZT_GATEWAY_DIAGNOSTICS_MAX_BYTES 1024
+#define ZT_GATEWAY_DIAGNOSTICS_SEND_TIMEOUT_MS 20
 #define ZT_GATEWAY_BACKOFF_COUNT 6
 #define ZT_GATEWAY_BACKOFF_MS {1000, 2000, 4000, 8000, 16000, 30000}
 #define ZT_GATEWAY_BACKOFF_CAP_MS 30000
@@ -58,7 +63,8 @@ typedef enum {
     ZT_GATEWAY_HELLO, ZT_GATEWAY_EVENTS, ZT_GATEWAY_ACK, ZT_GATEWAY_NEED,
     ZT_GATEWAY_TIME_SYNC, ZT_GATEWAY_WELCOME, ZT_GATEWAY_RECEIPTS,
     ZT_GATEWAY_DECISIONS, ZT_GATEWAY_COMMANDS, ZT_GATEWAY_SNAPSHOT,
-    ZT_GATEWAY_NEED_EVENTS, ZT_GATEWAY_TIME_SYNC_REPLY, ZT_GATEWAY_ERROR
+    ZT_GATEWAY_NEED_EVENTS, ZT_GATEWAY_TIME_SYNC_REPLY, ZT_GATEWAY_ERROR,
+    ZT_GATEWAY_DIAGNOSTICS
 } zt_gateway_message_type_t;
 /* Enum names map exactly to lower-case t strings, e.g. TIME_SYNC_REPLY =>
  * "time_sync_reply". These enum ordinals are local, not wire numeric codes. */
@@ -102,7 +108,7 @@ typedef struct {
     zt_phase_t phase;
     zt_round_id_t round_id;
     uint32_t state_rev, resume_from, snapshot_id;
-    uint8_t snapshot_pages, resetting;
+    uint8_t snapshot_pages, resetting, diagnostics;
 } zt_gateway_welcome_t;
 /* Exactly one hello first after CONNECTED. Send nothing else until welcome.
  * reset: re-fetch snapshot while RETAINING EVERY unsent/undecided local event.
@@ -175,6 +181,23 @@ typedef struct {
 typedef struct { uint8_t count; zt_event_id_t events[ZT_GATEWAY_NEED_EVENTS_MAX]; } zt_gateway_need_events_t;
 typedef struct { uint32_t nonce; } zt_gateway_time_sync_t;
 typedef struct { uint32_t nonce; uint64_t server_time_ms; } zt_gateway_time_sync_reply_t;
+/* Cumulative counters since gateway initialization, saturated at UINT32_MAX.
+ * Reconnects counts successful WSS connections after the initial one, including
+ * registration/control's planned WSS replacement. Failures counts local
+ * failed operations/transport errors (one incident may affect both). Memory is
+ * internal 8-bit heap; stack low watermarks are ESP-IDF byte units. No payloads,
+ * MACs, player names, credentials, arbitrary text, or mesh diagnostics. */
+typedef struct {
+    zt_round_id_t round_id;
+    zt_boot_nonce_t host_boot;
+    char fw[ZT_BUILD_ID_LEN + 1];
+    uint32_t seq;
+    uint64_t uptime_ms;
+    uint32_t reconnects, failures, dropped_messages, send_failures;
+    uint32_t heap_free_bytes, heap_min_free_bytes, heap_largest_free_bytes;
+    uint32_t gateway_stack_free_bytes, websocket_stack_free_bytes;
+    zt_err_t last_error;
+} zt_gateway_diagnostics_t;
 /* Parsed text spans index the caller-owned JSON buffer, which must remain
  * unchanged until the message is consumed. No server-supplied text in logs
  * unless sanitized and known non-secret. */
@@ -196,6 +219,7 @@ typedef struct {
         zt_gateway_need_events_t need_events;
         zt_gateway_time_sync_reply_t time_sync_reply;
         zt_gateway_error_t error;
+        zt_gateway_diagnostics_t diagnostics;
     } body;
 } zt_gateway_message_t;
 typedef struct { uint16_t start, end, parent, child_count; uint8_t type; } zt_json_token_t;

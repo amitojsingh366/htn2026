@@ -2,10 +2,9 @@
 
 Replaces the previous FastAPI app (`main.py`, in git history before this branch).
 
-The LIVEG007 winner logic and LIVEG009–LIVEG010 reset/replay improvements described
-here are local source changes. Production deployment remains pending explicit
-approval; a successful local build does not update the live Worker. See
-[HANDOFF.md](../HANDOFF.md) for the exact packaged and deployed versions.
+The live gateway, firmware recovery, Outbreak Director and Sentry integration are
+combined in LIVEG012. See [the integrated release guide](../docs/integrated-release.md)
+for configuration, validation and deployment/flash instructions.
 
 ## Layout
 

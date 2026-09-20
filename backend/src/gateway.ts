@@ -1,3 +1,4 @@
+import { Sentry, GameTelemetry, setGame, reportFailure } from "./telemetry";
 /** Host-only gateway protocol; every event receipt follows durable ingestion. */
 import type { AnnouncementRequest, AnnouncementResult, DirectorObservation } from "./director-types";
 
@@ -37,7 +38,7 @@ type Meta = {
   end?: RoundEnd;
   closed?: Record<string, number>;
 };
-type Attachment = { is_gateway: true; gameId: string; welcomed: boolean; lastClientId: number; lastSeenAt?: number; replayTurn?: number; commandCursor?: number; commandSends?: Record<string, number>; decisionCursor?: string; decisionRepeatAt?: number; needCursor?: number; needRepeatAt?: number; prepareSeeded?: number; endSent?: number; finalSent?: number; resetRound?: string };
+type Attachment = { is_gateway: true; gameId: string; welcomed: boolean; hostBoot?: string; lastClientId: number; lastSeenAt?: number; replayTurn?: number; commandCursor?: number; commandSends?: Record<string, number>; decisionCursor?: string; decisionRepeatAt?: number; needCursor?: number; needRepeatAt?: number; prepareSeeded?: number; endSent?: number; finalSent?: number; resetRound?: string };
 type CommandRow = { seq: number; body: string; acknowledged: string };
 type ControlRow = { request: string; response: string; status: number };
 type AnnouncementRow = { request: string; result: string; command_seq: number | null; created_at: number; expires_at: number; round_id: string };
@@ -61,7 +62,7 @@ function infection(value: unknown, roundId: string): Infection {
 }
 
 export class GatewayError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 409) { super(message); }
+  constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "GatewayError"; }
 }
 function object(value: unknown): Json {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new GatewayError("INVALID_PAYLOAD", "Expected an object", 400);
@@ -116,7 +117,7 @@ async function readBody(request: Request): Promise<unknown> {
 }
 
 export class HostGateway {
-  constructor(private ctx: DurableObjectState, private env: Env, private changed: () => void) {}
+  constructor(private ctx: DurableObjectState, private env: Env, private changed: () => void, private telemetry: GameTelemetry) {}
 
   initialize(): void {
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_meta (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)");
@@ -165,6 +166,7 @@ export class HostGateway {
   }
   dashboard(): Json {
     const m = this.get();
+    setGame(m.gameId || "default", m.roundId, m.hostBoot);
     const sockets = this.sockets();
     const start = m.startSeq ? this.ctx.storage.sql.exec<CommandRow>("SELECT seq,body,acknowledged FROM gateway_commands WHERE seq=?", m.startSeq).toArray()[0] : undefined;
     const startedSlots = start ? JSON.parse(start.acknowledged) as number[] : [];
@@ -343,7 +345,7 @@ export class HostGateway {
   private send(ws: WebSocket, value: Json): void {
     const payload = JSON.stringify(value);
     if (textEncoder.encode(payload).length > MAX_BYTES) throw new Error("Gateway payload exceeds protocol bound");
-    try { ws.send(payload); } catch { /* Persisted messages replay on reconnect. */ }
+    try { ws.send(payload); } catch { this.telemetry.log("connection.send_failed", { connection: "host" }, "warn"); /* Persisted messages replay on reconnect. */ }
   }
   private transient(ws: WebSocket, type: string, fields: Json): void {
     const m = this.get(); const value = this.envelope(m, type, fields); this.put(m); this.send(ws, value);
@@ -561,6 +563,7 @@ export class HostGateway {
       response = this.envelope(m, "receipts", { received_events: [...new Set(events.map(e => e.id))] });
       this.put(m);
     });
+    this.telemetry.log("game.infections_processed", { events: events.length, round_id: m.roundId, state_rev: m.revision });
     this.send(ws, response!); this.changed();
   }
   private replay(ws: WebSocket, replyWhenIdle = false): void {
@@ -728,6 +731,7 @@ export class HostGateway {
   }
   async fetch(request: Request, gameId: string, route: string): Promise<Response> {
     const failure = this.authenticate(request); if (failure) return failure;
+    setGame(gameId);
     try {
       hex(gameId, 16);
       const m = this.get();
@@ -743,7 +747,7 @@ export class HostGateway {
         return json({ ...fields, v: 1, game_id: gameId, host_id: this.env.ZT_HOST_MAC, server_time_ms: Date.now(), max_players: 20,
           socket_path: `/api/v1/games/${gameId}/gateway/socket` });
       }
-      if (route === "/registrations" && request.method === "POST") return this.register(await readBody(request), request.headers.get("Idempotency-Key"));
+      if (route === "/registrations" && request.method === "POST") return await Sentry.startSpan({ name: "game.registration", op: "game.registration" }, async () => this.register(await readBody(request), request.headers.get("Idempotency-Key")));
       if (route === "/gateway/control" && request.method === "POST") return await this.control(await readBody(request), gameId);
       if (route === "/gateway/socket" && request.method === "GET") {
         if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return json({ v: 1, code: "UPGRADE_REQUIRED" }, 426);
@@ -836,11 +840,15 @@ export class HostGateway {
       this.put(m); this.syncPopulation(m);
       this.ctx.storage.sql.exec("INSERT INTO gateway_registrations VALUES(?,?,?)", key, canonical, JSON.stringify(response));
     });
+    this.telemetry.log("game.registered", { players: m.roster.length, slot: player.slot, outcome: existing ? "rejoined" : "registered", round_id: m.roundId });
     this.changed();
     return json(response, existing ? 200 : 201);
   }
 
   async prepare(gameId: string, control?: { registrationId: string; persist: (next: Meta) => void }): Promise<Json> {
+    return Sentry.startSpan({ name: "game.round.prepare", op: "game.round.prepare" }, () => this.prepareImpl(gameId, control));
+  }
+  private async prepareImpl(gameId: string, control?: { registrationId: string; persist: (next: Meta) => void }): Promise<Json> {
     let m = this.get();
     if (m.roundId) return this.startResult(m);
     if (m.roster.length < 2 || m.roster.length > 20) throw new GatewayError("ROSTER_SIZE", "Register 2–20 badges before starting.");
@@ -873,6 +881,8 @@ export class HostGateway {
       this.put(m);
       control?.persist(m);
     });
+    setGame(m.gameId, m.roundId, m.hostBoot);
+    this.telemetry.log("game.round_prepared", { players: m.roster.length, state_rev: m.revision });
     for (const ws of this.sockets()) this.snapshot(ws, m.snapshotId, 0);
     this.changed();
     return this.startResult(m);
@@ -884,6 +894,9 @@ export class HostGateway {
   }
   private maybeStart(m: Meta): void {
     if (m.resetSeq || m.startSeq || !m.prepareSeq || !m.roster.every(p => m.ready.includes(p.slot))) return;
+    Sentry.startSpan({ name: "game.round.start", op: "game.round.start" }, () => this.startRound(m));
+  }
+  private startRound(m: Meta): void {
     const random = new Uint32Array(1); crypto.getRandomValues(random);
     m.patientZero = m.roster[random[0] % m.roster.length].slot;
     m.startTime = Date.now() + START_COUNTDOWN_MS; m.phase = "running"; m.revision++; m.snapshotId++;
@@ -902,6 +915,16 @@ export class HostGateway {
       let parsed: unknown;
       try { parsed = JSON.parse(raw); } catch { throw new GatewayError("INVALID_PAYLOAD", "Invalid JSON", 400); }
       const b = object(parsed), a = ws.deserializeAttachment() as Attachment;
+      // Host-local diagnostics use this authenticated socket only. They never
+      // trigger receipts, replay, state broadcasts, or radio mesh messages.
+      if (b.t === "diagnostics") {
+        if (!a.welcomed || b.v !== 1 || typeof b.id !== "number" || !Number.isInteger(b.id) || b.id <= a.lastClientId || b.id > 0xffffffff || typeof b.ts !== "number" || !Number.isSafeInteger(b.ts) || b.ts < 0) return;
+        a.lastClientId = b.id; ws.serializeAttachment(a);
+        const meta = this.get(); setGame(a.gameId, meta.roundId, a.hostBoot);
+        this.telemetry.diagnostics(b, textEncoder.encode(raw).length, a.hostBoot, a.resetRound ?? meta.roundId);
+        return;
+      }
+      const context = this.get(); setGame(a.gameId, context.roundId, a.hostBoot);
       if (b.v !== 1 || typeof b.t !== "string") throw new GatewayError("INVALID_PAYLOAD", "Invalid envelope", 400);
       const id = integer(b.id, 1); integer(b.ts, 0, Number.MAX_SAFE_INTEGER);
       if (id <= a.lastClientId) throw new GatewayError("INVALID_PAYLOAD", "Client sequence must increase", 400);
@@ -932,12 +955,14 @@ export class HostGateway {
           previous.serializeAttachment({ ...attachment, welcomed: false });
           previous.close(1001, "Host reconnected");
         }
-        a.welcomed = true; a.lastClientId = id; a.lastSeenAt = Date.now(); a.resetRound = cleanup?.roundId ?? undefined; ws.serializeAttachment(a);
+        a.welcomed = true; a.hostBoot = hostBoot; a.lastClientId = id; a.lastSeenAt = Date.now(); a.resetRound = cleanup?.roundId ?? undefined; ws.serializeAttachment(a);
         if (!cleanup) { m.channel = channel; m.hostBoot = hostBoot; m.hostLastSeenAt = Date.now(); this.put(m); }
         const session = cleanup ?? m;
         this.transient(ws, "welcome", { server_time_ms: Date.now(), resume: last > m.serverSeq ? "reset" : "ok", phase: session.phase, round_id: session.roundId,
           state_rev: session.revision, resume_from: last + 1, snapshot_id: cleanup ? 0 : m.snapshotId, snapshot_pages: cleanup ? 0 : m.roundId ? Math.ceil(m.roster.length / 8) : 0,
-          resetting: Boolean(cleanup || m.resetSeq) });
+          resetting: Boolean(cleanup || m.resetSeq), diagnostics: Boolean(this.env.SENTRY_DSN) });
+        setGame(a.gameId, session.roundId, hostBoot);
+        this.telemetry.log("connection.opened", { connection: "host", source: "durable_object" });
         this.changed(); return;
       }
       if (b.t === "hello") throw new GatewayError("INVALID_PAYLOAD", "Hello already received", 400);
@@ -979,7 +1004,7 @@ export class HostGateway {
         throw new GatewayError("INVALID_PAYLOAD", "Choose one need variant", 400);
       }
       if (b.t === "events") {
-        this.ingest(ws, m, boundedArray(b.events)); return;
+        Sentry.startSpan({ name: "game.infection.process", op: "game.infection.process" }, () => this.ingest(ws, m, boundedArray(b.events))); return;
       }
       if (b.t !== "ack") throw new GatewayError("INVALID_PAYLOAD", "Unsupported message type", 400);
       const applied = boundedArray(b.applied), ready = boundedArray(b.ready);
@@ -1033,13 +1058,18 @@ export class HostGateway {
         (receipt.result === "prepared_ready" || receipt.result === "applied"))) {
         a.prepareSeeded = m.prepareSeq; ws.serializeAttachment(a);
       }
-      if (!previousStart && m.startSeq) await this.ctx.storage.setAlarm(m.startTime + RULES.duration_ms);
+      if (!previousStart && m.startSeq) {
+        this.telemetry.log("game.round_started", { round_id: m.roundId, players: m.roster.length, state_rev: m.revision });
+        await this.ctx.storage.setAlarm(m.startTime + RULES.duration_ms);
+      }
       if (validated.some(r => r.result === "requires_snapshot")) this.snapshot(ws, m.startSeq ? m.snapshotId : m.prepareSnapshot, 0);
       else if (!previousStart && m.startSeq) this.announceCurrent();
       else this.replay(ws, true);
       this.changed();
     } catch (error) {
-      if (error instanceof GatewayError) { this.transient(ws, "error", { code: ["WRONG_ROUND", "INVALID_PAYLOAD", "CURSOR_EXPIRED"].includes(error.code) ? error.code : "INTERNAL", detail: error.message, fatal: false }); return; }
+      if (error instanceof GatewayError) { this.telemetry.log("gateway.rejected", { code: error.code }, "warn"); this.transient(ws, "error", { code: ["WRONG_ROUND", "INVALID_PAYLOAD", "CURSOR_EXPIRED"].includes(error.code) ? error.code : "INTERNAL", detail: error.message, fatal: false }); return; }
+      reportFailure(error);
+      this.telemetry.log("backend.failure", { source: "durable_object" }, "error");
       this.transient(ws, "error", { code: "INTERNAL", detail: "Gateway operation failed; pending evidence must be retained.", fatal: false });
     }
   }
