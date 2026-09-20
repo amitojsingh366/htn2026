@@ -120,6 +120,7 @@ static zt_round_id_t reset_round;
 static struct {
     zt_round_id_t round;
     uint32_t mask, command_seq[ZT_MAX_PLAYERS];
+    uint64_t request_due[ZT_MAX_PLAYERS];
     zt_mac_t macs[ZT_MAX_PLAYERS];
     bool complete_roster;
 } reset_relay;
@@ -230,6 +231,15 @@ static bool reset_receipt_matches(const zt_domain_message_t *m)
         (reset_relay.mask & (1u << slot)) && reset_relay.command_seq[slot] &&
         receipt->command_seq == reset_relay.command_seq[slot] &&
         mac_equal(&m->header.origin, &reset_relay.macs[slot]) &&
+        (!m->header.hops || !reset_relay.complete_roster || reset_relay_member(&m->direct_source));
+}
+static bool reset_snapshot_matches(const zt_domain_message_t *m)
+{
+    if (m->header.type!=ZT_PKT_SNAPSHOT_REQUEST || !m->header.round_id ||
+        m->header.round_id!=reset_relay.round) return false;
+    unsigned slot=m->payload.snapshot_request.slot;
+    return slot<ZT_MAX_PLAYERS && (reset_relay.mask&(1u<<slot)) &&
+        mac_equal(&m->header.origin,&reset_relay.macs[slot]) &&
         (!m->header.hops || !reset_relay.complete_roster || reset_relay_member(&m->direct_source));
 }
 static bool authoritative(uint8_t t)
@@ -415,6 +425,9 @@ static zt_err_t admissible(const zt_domain_message_t *m, const round_t *r)
     /* A cleared intermediary still relays only receipts for a RESET it saw
      * authorized by the host, with the exact target identity and command seq. */
     if (h->type == ZT_PKT_COMMAND_RECEIPT && reset_receipt_matches(m)) return ZT_OK;
+    /* Snapshot pulls from the latest retired roster are cleanup requests only.
+     * They may cross a new round's channel lock, but never restore old play. */
+    if (reset_snapshot_matches(m)) return ZT_OK;
     if (h->round_id && h->round_id == reset_round) {
         if (reset_command) {
             if (reset_relay.round == h->round_id && reset_relay.complete_roster && h->hops &&
@@ -693,6 +706,10 @@ zt_err_t zt_mesh_receive(const zt_rx_frame_t *frame)
         if (duplicate) count_rejection(&dedupe_hits);
         z = duplicate ? ZT_ERR_STALE : ZT_ERR_NO_SPACE;
     }
+    bool reset_request=z==ZT_OK && reset_snapshot_matches(&m);
+    /* Update this bound only after HMAC verification and successful delivery,
+     * so unauthenticated traffic cannot suppress a returning badge's repair. */
+    if (reset_request && now<reset_relay.request_due[m.payload.snapshot_request.slot]) z=ZT_ERR_BUSY;
     if (z == ZT_OK && m.header.type == ZT_PKT_BEACON && m.header.round_id == beacon_round && m.payload.beacon.slot < 20) {
         peer_t *p = &peers[m.payload.beacon.slot];
         if (p->seen && p->boot == m.header.origin_boot_nonce && m.header.packet_seq <= p->seq) z = ZT_ERR_STALE;
@@ -700,6 +717,8 @@ zt_err_t zt_mesh_receive(const zt_rx_frame_t *frame)
     if (z == ZT_OK) {
         z = deliver(&m, now);
         if (z == ZT_OK) {
+            if (reset_request) reset_relay.request_due[m.payload.snapshot_request.slot]=
+                now+ZT_SNAPSHOT_REQUEST_INTERVAL_MS*1000ULL;
             if (zt_radio_flood_type(m.header.type)) seen_envelope(&m.header, now / 1000, true, NULL);
             if (!m.header.hops && mac_equal(&m.header.origin, &m.direct_source))
                 atomic_store_explicit(&diagnostic_last_rssi, m.rssi, memory_order_relaxed);

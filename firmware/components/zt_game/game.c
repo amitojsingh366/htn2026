@@ -171,6 +171,8 @@ static struct { zt_game_feed_item_t item; uint64_t retry_us; bool submitted; } h
 static struct {
     zt_round_id_t round;
     zt_mac_t macs[ZT_MAX_PLAYERS];
+    uint64_t registration[ZT_MAX_PLAYERS], request_due[ZT_MAX_PLAYERS];
+    uint32_t valid_until[ZT_MAX_PLAYERS];
     uint32_t seq[ZT_MAX_PLAYERS], slots, known_slots;
 } reset_delivery;
 static void reset_service(uint64_t now);
@@ -1109,6 +1111,28 @@ static bool registration_result(const input_t *in,uint64_t now)
     }
     return true;
 }
+static bool host_reset_snapshot_request(const input_t *in,uint64_t now)
+{
+    if (!is_host() || !in->round || in->round!=reset_delivery.round) return false;
+    zt_wire_snapshot_request_t request;
+    if (zt_wire_decode_snapshot_request(in->bytes,in->len,&request)!=ZT_OK || request.slot>=ZT_MAX_PLAYERS) return true;
+    unsigned target=request.slot;
+    if (!(reset_delivery.slots&(1u<<target)) || !reset_delivery.seq[target] ||
+        !mac_equal(&in->origin,&reset_delivery.macs[target]) || now<reset_delivery.request_due[target]) return true;
+    /* A returning badge asks about its old round. Replay only the exact RESET
+     * authorized for that registration, even while a newer round is active. */
+    zt_wire_payload_t p={0};
+    p.command=(zt_wire_command_t){.command_seq=reset_delivery.seq[target],.kind=ZT_CMD_RESET_GAME,
+        .target_slot=target,.valid_until_elapsed_ms=reset_delivery.valid_until[target]};
+    uint64_t registration=reset_delivery.registration[target];
+    if (registration) {
+        p.command.args_len=14; memcpy(p.command.args,reset_delivery.macs[target].bytes,6);
+        for (unsigned i=0;i<8;++i) p.command.args[6+i]=(uint8_t)(registration>>(8*i));
+    }
+    if (send_payload(in->round,ZT_PKT_COMMAND,&p,ZT_TX_PRIO_EVENT_CONTROL)==ZT_OK)
+        reset_delivery.request_due[target]=now+ZT_SNAPSHOT_REQUEST_INTERVAL_MS*1000ULL;
+    return true;
+}
 static void host_snapshot_request(const input_t *in,uint64_t now)
 {
     zt_wire_snapshot_request_t r;
@@ -1161,13 +1185,17 @@ static bool process_command(unsigned ci,uint64_t now)
             }
             reset_delivery.macs[cmd->target_slot]=target_mac;
             reset_delivery.seq[cmd->target_slot]=cmd->command_seq;
+            reset_delivery.registration[cmd->target_slot]=target_registration;
+            reset_delivery.valid_until[cmd->target_slot]=cmd->valid_until_elapsed_ms;
             reset_delivery.slots|=1u<<cmd->target_slot;
             reset_delivery.known_slots|=1u<<cmd->target_slot;
             return true;
         }
         if (retired_round) return true; /* Only remote server cleanup crosses our reset. */
         if (!self || !join_nonce || !view.registered || cmd->target_slot!=view.self_slot ||
-            (current.round_id && msg->round_id!=current.round_id) ||
+            /* A legacy slot-only reset belongs to a frozen round; it must
+             * never clear a reused slot in a newly registered lobby. */
+            ((!cmd->args_len || current.round_id) && msg->round_id!=current.round_id) ||
             (cmd->args_len && target_registration!=registration_id())) return true;
         zt_persist_request_t request={.kind=ZT_PERSIST_RESET_ROUND,.round_id=msg->round_id};
         request.value.reset=(zt_reset_receipt_t){msg->round_id,cmd->command_seq,view.self_slot,view.channel};
@@ -1749,6 +1777,7 @@ static bool process_input(const input_t *in,uint64_t now)
         }
         return true;
     }
+    if (in->type==ZT_PKT_SNAPSHOT_REQUEST && host_reset_snapshot_request(in,now)) return true;
     if (in->round && in->round==reset_record.round_id && in->type!=ZT_PKT_BEACON) return true;
     if (in->type==ZT_PKT_JOIN) { host_join(in,now); return true; }
     if (in->type==ZT_PKT_SNAPSHOT_REQUEST) { host_snapshot_request(in,now); return true; }
