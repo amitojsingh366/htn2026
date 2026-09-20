@@ -227,14 +227,21 @@
 }
 
 .round-status-banner {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 42%),
     var(--glass-deep);
-  border: 1px solid var(--iron);
-  padding: 16px 20px;
+  backdrop-filter: blur(9px) saturate(0.85);
+  -webkit-backdrop-filter: blur(9px) saturate(0.85);
+  border: 1px solid var(--iron-lit);
+  border-radius: 3px;
+  padding: 16px 22px;
+  box-shadow: var(--pall);
 }
 
 .round-stat-item {
@@ -296,6 +303,10 @@
 
 /* ---------- Final rankings ---------- */
 .leaderboard-panel {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 3px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 42%),
     var(--glass-deep);
