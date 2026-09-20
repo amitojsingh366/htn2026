@@ -1,0 +1,41 @@
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE=n
+CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION=n
+CONFIG_ESP_PHY_ENABLE_USB=y
+CONFIG_BT_ENABLED=n
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_ESP_TLS_INSECURE=n
+CONFIG_WS_TRANSPORT=y
+
+# Diagnostics, 2026-09-19, orchestrator-owned.
+# A badge that panics with PANIC_PRINT_REBOOT and a zero delay reboots before its USB
+# Serial/JTAG device can enumerate, so the only debug channel the design has disappears
+# exactly when it is needed and the LCD keeps showing the last frame it drew. Halting
+# instead keeps the peripheral up, so the panic text and backtrace can actually be read.
+# This is a development setting: revisit before any participant rollout.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
+
+# The main task ran out of stack during boot and panicked with a stack protection
+# fault, which halted the CPU mid-frame and presented as a display failure. The large
+# locals are now static, and this adds headroom so a future boot-time addition fails
+# visibly in review rather than as a mysterious frozen screen.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# 1 kHz tick: the service loops in plan.md 7 are specified in milliseconds, and at the
+# default 100 Hz a 5 ms delay rounds down to zero ticks and does not block at all.
+CONFIG_FREERTOS_HZ=1000
+
+# Free record buffers between TLS I/O without lowering the server RX record limit.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

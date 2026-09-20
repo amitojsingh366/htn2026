@@ -5,7 +5,7 @@ export { GameRoom } from "./game-room";
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -38,10 +38,23 @@ export default {
 
     const url = new URL(request.url);
     const { gameId, route } = resolveRoute(url.pathname);
+    if (route.startsWith("/gateway/") || route === "/registrations") {
+      return env.GAME_ROOM.getByName(gameId).fetch(request);
+    }
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname.startsWith("/assets/") || /\.(svg|ico|png)$/.test(url.pathname))) {
+      return env.ASSETS.fetch(request);
+    }
     const stub = env.GAME_ROOM.getByName(gameId);
 
     // WebSocket upgrades are passed through to the Durable Object untouched.
-    if (route === "/ws/population" && request.headers.get("Upgrade") === "websocket") {
+    const isWebSocketRoute =
+      route === "/ws/population" ||
+      route === "/ws/device" ||
+      route === "/ws/esp" ||
+      route.startsWith("/ws/device/") ||
+      route.startsWith("/ws/esp/");
+
+    if (isWebSocketRoute && request.headers.get("Upgrade") === "websocket") {
       return stub.fetch(request);
     }
 
@@ -66,29 +79,69 @@ export default {
         case "/num-infected":
           return json({ num_infected: (await stub.getState()).num_infected });
 
+        case "/rankings":
+        case "/leaderboard":
+          return json(await stub.getRankings(gameId));
+
+        case "/device-state": {
+          const deviceId = url.searchParams.get("device_id") || url.searchParams.get("deviceId") || "";
+          return json(await stub.getDeviceState(deviceId));
+        }
+
         case "/ws/population":
           return json({
             message: `This is a WebSocket endpoint. Connect with ws(s)://${url.host}${url.pathname}`,
             current_state: await stub.getState(),
+          });
+
+        case "/ws/device":
+        case "/ws/esp":
+          return json({
+            message: `This is an ESP WebSocket endpoint. Connect with ws(s)://${url.host}${url.pathname}?device_id=<your_device_id>`,
           });
       }
     }
 
     if (request.method === "POST") {
       switch (route) {
+        case "/start-game":
+        case "/game/start": {
+          try { return json(await stub.startGame(gameId)); }
+          catch (error) { return json({ error: error instanceof Error ? error.message : "Unable to prepare game" }, 409); }
+        }
+
+        case "/device-event":
+        case "/esp/event":
+        case "/device-state": {
+          let body: unknown;
+          try {
+            body = await request.json();
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400);
+          }
+
+          try {
+            const state = await stub.recordDeviceEvent(body as any);
+            return json({ message: "Device event recorded", ...state });
+          } catch (err: any) {
+            return json({ error: err?.message || "Failed to record event" }, 400);
+          }
+        }
+
         case "/add-player": {
-          const state = await stub.addPlayer();
-          return json({ message: "Player added", ...state });
+          try { return json({ message: "Player added", ...await stub.addPlayer() }); }
+          catch (error) { return json({ error: error instanceof Error ? error.message : "Cannot add player" }, 409); }
         }
 
         case "/add-infected": {
-          const state = await stub.addInfected();
-          return json({ message: "Infected added", ...state });
+          try { return json({ message: "Infected added", ...await stub.addInfected() }); }
+          catch (error) { return json({ error: error instanceof Error ? error.message : "Cannot change roles" }, 409); }
         }
 
+        case "/reset-game":
         case "/reset-population": {
-          const state = await stub.reset();
-          return json({ message: "Population reset", ...state });
+          try { return json({ message: "Server game state and registrations cleared", ...await stub.reset() }); }
+          catch (error) { return json({ error: error instanceof Error ? error.message : "Cannot reset active round" }, 409); }
         }
       }
     }

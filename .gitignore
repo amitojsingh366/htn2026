@@ -68,3 +68,34 @@ Desktop.ini
 # Cloudflare Workers
 .wrangler/
 .dev.vars
+
+# ---- Zombie Tag firmware orchestration (added by firmware integration) ----
+# Worker checkouts, orchestrator ledger/logs, and release staging
+.worktrees/
+.orchestration/
+tools/__pycache__/
+**/__pycache__/
+
+# ESP-IDF build output and fetched components
+firmware/build/
+**/build/
+**/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock.bak
+
+# Recovery / provisioning / private device data — never in Git
+probe/
+.probe-venv/
+.venv*/
+provisioning/
+backups/
+private/
+*.bin
+*.elf
+*.map
+*.log
+
+# Frontend/backend binary assets that must stay tracked despite *.bin rules
+!frontend/src/assets/*.png
+!frontend/public/*.svg

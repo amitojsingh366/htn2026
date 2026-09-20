@@ -2,10 +2,38 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import './PopulationState.css';
 
 export interface PopulationStateData {
+  gateway_mode?: boolean;
+  gateway_phase?: string;
+  ready_players?: number;
+  registered_players?: number;
+  frozen_roster_players?: number;
+  start_applied_players?: number;
+  ready_slots?: number[];
+  start_applied_slots?: number[];
+  reset_applied_players?: number;
+  events_received?: number;
+  events_pending?: number;
+  events_rejected?: number;
+  host_connected?: boolean;
+  host_last_seen_at?: number | null;
+  players?: Array<{slot: number; id: string; name: string; role?: 'H' | 'Z'; role_rev?: number; covered_seq?: number}>;
   num_players: number;
   num_infected: number;
   num_humans: number;
   survived_pct: number;
+  game_over?: boolean;
+  winner?: 'H' | 'Z' | null;
+  ended_at?: number | null;
+  result_final?: boolean;
+  result_complete?: boolean;
+  started_at?: number | null;
+  patient_zero_id?: string | null;
+  rankings?: Array<{
+    rank: number;
+    device_id: string;
+    state: string;
+    survival_time_seconds: number;
+  }>;
 }
 
 export interface PopulationStateProps {
@@ -27,12 +55,14 @@ export interface PopulationStateProps {
   className?: string;
   /** Callback fired whenever state updates */
   onUpdate?: (data: PopulationStateData) => void;
+  /** Whether the dashboard has a working connection to the backend. */
+  onConnectionChange?: (connected: boolean) => void;
   /** Show live connection pulse indicator in header */
   showLiveIndicator?: boolean;
 }
 
 export const PopulationState: React.FC<PopulationStateProps> = ({
-  apiBaseUrl = 'http://localhost:8787',
+  apiBaseUrl = 'https://htn2026-backend.amitoj.workers.dev/api/v1/games/005a544d454d4f01',
   wsUrl,
   useWebSocket = true,
   pollIntervalMs,
@@ -41,6 +71,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   infectedCount: manualInfected,
   className = '',
   onUpdate,
+  onConnectionChange,
   showLiveIndicator = false,
 }) => {
   const effectiveFallbackInterval = pollIntervalMs ?? fallbackPollIntervalMs;
@@ -56,6 +87,9 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const updateSequenceRef = useRef(0);
+  const httpPendingRef = useRef(false);
+  useEffect(() => { onConnectionChange?.(isConnected); }, [isConnected, onConnectionChange]);
 
   // Manual values override handler
   useEffect(() => {
@@ -75,12 +109,19 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
   // HTTP Fetch function (used on mount & as fallback)
   const fetchHttpState = useCallback(async () => {
-    if (manualTotal !== undefined && manualInfected !== undefined) return;
+    if ((manualTotal !== undefined && manualInfected !== undefined) || httpPendingRef.current) return;
+    httpPendingRef.current = true;
+    const sequence = updateSequenceRef.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
 
     try {
-      const res = await fetch(`${apiBaseUrl}/population-state`);
+      const res = await fetch(`${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`);
       if (res.ok) {
         const json = await res.json();
+        // An older HTTP request must not overwrite a more recent pushed state.
+        if (sequence !== updateSequenceRef.current) return;
         const total = manualTotal ?? json.num_players ?? 0;
         const infected = manualInfected ?? json.num_infected ?? 0;
         const humans = json.num_humans ?? Math.max(0, total - infected);
@@ -91,15 +132,35 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           num_infected: infected,
           num_humans: humans,
           survived_pct: Number(pct.toFixed(1)),
+          game_over: json.game_over,
+          winner: json.winner, ended_at: json.ended_at,
+          result_final: json.result_final, result_complete: json.result_complete,
+          started_at: json.started_at,
+          patient_zero_id: json.patient_zero_id,
+          rankings: json.rankings,
+          gateway_mode: json.gateway_mode, gateway_phase: json.gateway_phase,
+          ready_players: json.ready_players, registered_players: json.registered_players,
+          frozen_roster_players: json.frozen_roster_players, start_applied_players: json.start_applied_players,
+          ready_slots: json.ready_slots, start_applied_slots: json.start_applied_slots,
+          reset_applied_players: json.reset_applied_players, events_received: json.events_received,
+          events_pending: json.events_pending, events_rejected: json.events_rejected,
+          host_last_seen_at: json.host_last_seen_at,
+          host_connected: json.host_connected, players: json.players,
         };
 
         setData(updated);
+        updateSequenceRef.current++;
         setIsConnected(true);
         setError(null);
         onUpdate?.(updated);
       }
     } catch (err: unknown) {
+      if (sequence !== updateSequenceRef.current) return;
+      setIsConnected(false);
       setError(err instanceof Error ? err.message : 'Backend unreachable');
+    } finally {
+      clearTimeout(timeout);
+      httpPendingRef.current = false;
     }
   }, [apiBaseUrl, manualTotal, manualInfected, onUpdate]);
 
@@ -124,7 +185,6 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
             socket.close();
             return;
           }
-          setIsConnected(true);
           setIsWebSocketActive(true);
           setError(null);
         };
@@ -142,10 +202,26 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
               num_infected: infected,
               num_humans: humans,
               survived_pct: Number(pct.toFixed(1)),
+              game_over: rawData.game_over,
+              winner: rawData.winner, ended_at: rawData.ended_at,
+              result_final: rawData.result_final, result_complete: rawData.result_complete,
+              started_at: rawData.started_at,
+              patient_zero_id: rawData.patient_zero_id,
+              rankings: rawData.rankings,
+              gateway_mode: rawData.gateway_mode, gateway_phase: rawData.gateway_phase,
+              ready_players: rawData.ready_players, registered_players: rawData.registered_players,
+              frozen_roster_players: rawData.frozen_roster_players, start_applied_players: rawData.start_applied_players,
+              ready_slots: rawData.ready_slots, start_applied_slots: rawData.start_applied_slots,
+              reset_applied_players: rawData.reset_applied_players, events_received: rawData.events_received,
+              events_pending: rawData.events_pending, events_rejected: rawData.events_rejected,
+              host_last_seen_at: rawData.host_last_seen_at,
+              host_connected: rawData.host_connected, players: rawData.players,
             };
 
             setData(updated);
+            updateSequenceRef.current++;
             setIsConnected(true);
+            setError(null);
             onUpdate?.(updated);
           } catch (e) {
             console.error('Error parsing WebSocket message:', e);
@@ -154,6 +230,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
         socket.onclose = () => {
           setIsWebSocketActive(false);
+          setIsConnected(false);
           if (!isUnmounted) {
             // Schedule reconnection attempt
             reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 2000);
@@ -187,12 +264,13 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
     };
   }, [useWebSocket, wsUrl, apiBaseUrl, manualTotal, manualInfected, fetchHttpState, onUpdate]);
 
-  // Optional Fallback HTTP polling (only runs when WebSocket is NOT active)
+  // Also refresh occasionally with a socket open: host connectivity can expire
+  // without a population change, and an idle dashboard socket can be stale.
   useEffect(() => {
-    if (isWebSocketActive || effectiveFallbackInterval <= 0) return;
+    if (effectiveFallbackInterval <= 0) return;
 
     fetchHttpState();
-    const interval = setInterval(fetchHttpState, effectiveFallbackInterval);
+    const interval = setInterval(fetchHttpState, isWebSocketActive ? Math.max(10_000, effectiveFallbackInterval) : effectiveFallbackInterval);
     return () => clearInterval(interval);
   }, [isWebSocketActive, effectiveFallbackInterval, fetchHttpState]);
 
@@ -200,6 +278,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   const total = data.num_players > 0 ? data.num_players : data.num_humans + data.num_infected;
   const humanPct = total > 0 ? Math.min(100, Math.max(0, (data.num_humans / total) * 100)) : 0;
   const infectedPct = total > 0 ? Math.min(100, Math.max(0, (data.num_infected / total) * 100)) : 0;
+  const rolesAssigned = Boolean(data.started_at);
 
   return (
     <div className={`population-state-card ${className}`} role="region" aria-label="Game Population State">
@@ -222,16 +301,16 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
             <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
             <path d="M16 3.13a4 4 0 0 1 0 7.75" />
           </svg>
-          <span className="population-state-heading">GAME POPULATION STATE</span>
+          <span className="population-state-heading">{data.gateway_mode ? rolesAssigned ? 'SERVER ROLE COUNTS' : 'REGISTERED BADGES' : 'GAME POPULATION STATE'}</span>
           {showLiveIndicator && (
             <span
               className={`live-pulse-dot ${isConnected ? 'online' : 'offline'}`}
               title={
-                isWebSocketActive
-                  ? 'Real-time WebSocket connected (0ms push)'
-                  : isConnected
-                  ? 'HTTP polling connected'
-                  : `Offline: ${error ?? 'Attempting reconnection'}`
+                !isConnected
+                  ? `Dashboard feed unavailable: ${error ?? 'Attempting reconnection'}`
+                  : isWebSocketActive
+                  ? 'Dashboard feed connected'
+                  : 'HTTP polling connected'
               }
             />
           )}
@@ -239,14 +318,14 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
         {/* Survived percentage badge */}
         <div className="population-state-badge">
-          {data.survived_pct.toFixed(1)}% Survived
+          {data.gateway_mode ? `${data.registered_players ?? total}/20 saved` : `${data.survived_pct.toFixed(1)}% Survived`}
         </div>
       </div>
 
       {/* Progress Bar */}
-      <div className="population-progress-track">
+      {(!data.gateway_mode || rolesAssigned) && <div className="population-progress-track">
         <div
-          className="population-progress-humans"
+          className="population-progress-survivors"
           style={{ width: `${humanPct}%` }}
           aria-label={`${humanPct.toFixed(1)}% humans`}
         />
@@ -255,20 +334,27 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           style={{ width: `${infectedPct}%` }}
           aria-label={`${infectedPct.toFixed(1)}% zombies`}
         />
-      </div>
+      </div>}
 
       {/* Footer Stats Row */}
-      <div className="population-state-footer">
-        <div className="population-stat-humans">
-          <span className="stat-dot dot-humans" aria-hidden="true" />
-          <span>Humans: {data.num_humans}</span>
+      {data.gateway_mode && !rolesAssigned ? <div className="population-registration-summary">
+        <span>Roles unassigned</span>
+        <span>Online badges: unknown</span>
+      </div> : <div className="population-state-footer">
+        <div className="population-stat-survivors">
+          <span className="stat-dot dot-survivors" aria-hidden="true" />
+          <span>{data.gateway_mode ? 'Server humans' : 'Humans'}: {data.num_humans}</span>
         </div>
 
         <div className="population-stat-zombies">
-          <span>Zombies: {data.num_infected}</span>
+          <span>{data.gateway_mode ? 'Server zombies' : 'Zombies'}: {data.num_infected}</span>
           <span className="stat-dot dot-zombies" aria-hidden="true" />
         </div>
-      </div>
+      </div>}
+      <p className={`population-feed-status ${isConnected ? '' : 'unavailable'}`} role="status">
+        {isConnected ? 'Dashboard feed connected.' : `Dashboard feed unavailable${error ? `: ${error}` : '; reconnecting'}. Values may be stale.`}
+        {data.gateway_mode && (rolesAssigned ? ' Counts include accepted infection events. Offline tags appear after the host uploads their evidence.' : ' Registrations remain saved when badges are powered off. Badge online status is not reported.')}
+      </p>
     </div>
   );
 };
