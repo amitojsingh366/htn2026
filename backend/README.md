@@ -182,3 +182,10 @@ see [live backend operation](../docs/live-backend.md) for the build, flash and s
   requested no tests, reviews, harnesses, simulations or hardware access.
 - First deploy applies migration `v1` (`new_sqlite_classes: ["GameRoom"]`).
   Do not edit that entry afterwards — add a new tag instead.
+
+## Outbreak director (Cloudflare + OpenAI)
+
+See [configuration, verification and live demo steps](../docs/outbreak-director.md).
+The feature is disabled by default. It adds an Agents SDK Durable Object with
+persistent observations, bounded OpenAI Responses calls, safe announcement tools,
+and scheduled follow-ups; it does not change gameplay authority.

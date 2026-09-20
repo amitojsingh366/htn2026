@@ -108,7 +108,8 @@ received API replies, so they are not a provider billing ledger or dollar cap.
 The director asks for a 30-second announcement TTL; the gateway independently
 allows at most 60 seconds and never extends past the round deadline. It requires
 a connected host heard within 25 seconds, at least 15 seconds between accepted
-announcements, and no more than three outstanding broadcasts. Text is normalized
+announcements, and no more than three outstanding broadcasts. Repeating the same
+normalized text in one round is rejected, even under a new action ID. Text is normalized
 to at most 96 printable ASCII characters without markup. Expired and ended-round
 announcements stop replaying; critical gameplay commands remain eligible.
 
@@ -117,6 +118,8 @@ checks, 15-second display spacing, and the earlier of ten seconds or command
 expiry. Mesh transmission uses cosmetic priority. Infection and tag feedback
 take screen priority. `queued` means server custody; per-badge `applied` receipts
 mean admission to each badge's display snapshot, not proof a player read it.
+Delivery audit results settle to `applied` or `expired` once terminal; interrupted
+announcement intents are reconciled against the gateway without resending.
 Badge announcement deduplication is RAM-only for the current round/boot, so an
 unacknowledged message can replay after reboot within its remaining TTL. It adds
 no flash writes. See [the badge protocol](protocol.md) for the wire contract.
@@ -138,7 +141,16 @@ npm --prefix backend test
 npm --prefix frontend run build
 npm --prefix frontend run lint
 sh firmware/tests/run-announcement-tests.sh
+(cd backend && npx wrangler deploy --dry-run)
 ```
+
+The Worker test pool is pinned by the lockfile and currently uses a workerd
+runtime supporting compatibility dates through `2026-08-22`; its test-only date
+override is explicit in `vitest.config.ts`. Production retains `2026-09-19` and
+is separately checked with the installed Wrangler dry run and local boot. Tests
+use a clearly synthetic API key and controlled responses, including persisted
+memory across actual Durable Object eviction, budgeting, SDK schedules, API
+failure, late results, and reset races.
 
 The native C test exercises the real gateway decoder: accepted 96-character
 messages, escaped printable text, invalid targets, infinite expiry, empty and
@@ -152,6 +164,22 @@ The new firmware must be installed on the host and receiving badges for the
 completed ANNOUNCE path. Installation, merging, and deployment remain operator
 tasks. Use the existing guarded badge workflow in [live-backend.md](live-backend.md),
 not the generic full-flash commands printed by ESP-IDF.
+
+### Verified in this branch
+
+- Backend: 42 tests across four suites passed; TypeScript passed. API requests
+  were mocked and labelled with synthetic response/request IDs.
+- Frontend: production build and lint passed. Browser checks covered a 390px
+  viewport, a stalled request, recovery, and retained state after HTTP 503 while
+  the gameplay feed/controls remained independent.
+- Worker: Wrangler production bundle dry run passed; a local Worker using the
+  unchanged production compatibility date returned HTTP 200 for health and both
+  configured-game and unrelated-game director status. The missing-key state was
+  correctly disabled. No remote deployment ran.
+- Firmware: native decoder tests and the full ESP-IDF build passed, as detailed
+  above. Physical transmission/display has not been verified.
+- Production dependency audit: no advisories reported by `npm audit --omit=dev`
+  at implementation time.
 
 ## Live demo and evidence to capture
 
