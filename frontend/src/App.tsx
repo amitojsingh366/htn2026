@@ -2,9 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { PopulationState, type PopulationStateData } from './components/PopulationState';
 import { Roster } from './components/Roster';
 import './App.css';
-
-const GAME_ID = '005a544d454d4f01';
-const API_BASE = (import.meta.env.VITE_API_BASE ?? `https://htn2026-backend.amitoj.workers.dev/api/v1/games/${GAME_ID}`).replace(/\/$/, '');
+import { API_BASE, GAME_ID, gameRequest } from './telemetry';
 
 function App() {
   const [actionStatus, setActionStatus] = useState('Press A on every badge to join.');
@@ -12,7 +10,7 @@ function App() {
   const [feedConnected, setFeedConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(Date.now);
   const handleStateUpdate = useCallback((data: PopulationStateData) => setState(previous => ({
     ...data,
     // Older terminal responses may omit a cutoff. Freeze at first observation
@@ -31,9 +29,8 @@ function App() {
   const startGame = async () => {
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE}/start-game`, { method: 'POST' });
-      const result = await response.json();
-      setActionStatus(response.ok ? result.message : result.error ?? 'Unable to prepare the round.');
+      const { response, data: result } = await gameRequest<{ message?: string; error?: string }>('round.start', `${API_BASE}/start-game`, { method: 'POST' });
+      setActionStatus(response.ok ? result.message ?? 'Preparing the round.' : result.error ?? 'Unable to prepare the round.');
     } catch { setActionStatus('Backend unreachable.'); }
     finally { setBusy(false); }
   };
@@ -42,8 +39,7 @@ function App() {
     if (!window.confirm('Reset the server game and clear all saved registrations now? This completes even when badges are offline. Uploaded evidence stays archived; badges that receive reset will clear their pending local tags.')) return;
     setResetBusy(true);
     try {
-      const response = await fetch(`${API_BASE}/reset-game`, { method: 'POST' });
-      const result = await response.json();
+      const { response, data: result } = await gameRequest<PopulationStateData & { error?: string }>('round.reset', `${API_BASE}/reset-game`, { method: 'POST' });
       if (!response.ok) throw new Error(result.error ?? 'Unable to reset the game.');
       setState(result);
       setActionStatus('Game reset. Server state and saved registrations cleared. Register badges again to start a new game.');
@@ -92,7 +88,7 @@ function App() {
           </div>
           <div className="round-stat-item">
             <span className="round-stat-label">PATIENT ZERO</span>
-            <span className={`patient-zero-tag ${state?.patient_zero_id ? 'active' : ''}`}>
+            <span className={`patient-zero-tag sentry-block ${state?.patient_zero_id ? 'active' : ''}`}>
               {state?.players?.find(player => player.id === state.patient_zero_id)?.name ?? state?.patient_zero_id ?? 'Unassigned'}
             </span>
           </div>
@@ -106,7 +102,7 @@ function App() {
           </section>
         )}
 
-        <Roster players={state?.players ?? []} rolesAssigned={Boolean(scheduled)} loading={!state} />
+        <div className="sentry-block"><Roster players={state?.players ?? []} rolesAssigned={Boolean(scheduled)} loading={!state} /></div>
 
         <section className="component-showcase">
           <PopulationState apiBaseUrl={API_BASE} pollIntervalMs={2000} showLiveIndicator onUpdate={handleStateUpdate} onConnectionChange={setFeedConnected} />
@@ -137,7 +133,7 @@ function App() {
           {resetting && <p className="guide-desc" role="status">An earlier reset is still waiting. Press Reset Game to clear the server immediately.</p>}
         </section>
 
-        <details className="usage-guide saved-records">
+        <details className="usage-guide saved-records sentry-block">
           <summary>Registered badges · saved acknowledgments</summary>
           <p className="guide-desc">These records remain after badges power off. They do not count online badges.</p>
           <div className="table-responsive">

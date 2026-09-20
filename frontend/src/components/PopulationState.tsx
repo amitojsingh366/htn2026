@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import './PopulationState.css';
+import { gameLog, gameRequest, reportFailure, traceStateUpdate, type StateTelemetry } from '../telemetry';
 
-export interface PopulationStateData {
+export interface PopulationStateData extends StateTelemetry {
   gateway_mode?: boolean;
   gateway_phase?: string;
   ready_players?: number;
@@ -75,7 +76,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   showLiveIndicator = false,
 }) => {
   const effectiveFallbackInterval = pollIntervalMs ?? fallbackPollIntervalMs;
-  const [data, setData] = useState<PopulationStateData>({
+  const [receivedData, setData] = useState<PopulationStateData>({
     num_players: manualTotal ?? 0,
     num_infected: manualInfected ?? 0,
     num_humans: Math.max(0, (manualTotal ?? 0) - (manualInfected ?? 0)),
@@ -89,23 +90,40 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   const reconnectTimeoutRef = useRef<number | null>(null);
   const updateSequenceRef = useRef(0);
   const httpPendingRef = useRef(false);
+  const lastStateSignatureRef = useRef('');
+  const applyState = useCallback((updated: PopulationStateData, transport: 'http' | 'websocket') => {
+    traceStateUpdate(updated, transport, () => {
+      setData(updated);
+      updateSequenceRef.current++;
+      setIsConnected(true);
+      setError(null);
+      const signature = [updated.round_id, updated.gateway_phase, updated.registered_players, updated.num_infected, updated.events_pending, updated.events_rejected, updated.game_over, updated.host_connected].join('|');
+      if (signature !== lastStateSignatureRef.current) {
+        gameLog('state.changed', { ...updated, transport, action_id: updated.telemetry?.action_id });
+        lastStateSignatureRef.current = signature;
+      }
+      onUpdate?.(updated);
+    });
+  }, [onUpdate]);
   useEffect(() => { onConnectionChange?.(isConnected); }, [isConnected, onConnectionChange]);
 
-  // Manual values override handler
-  useEffect(() => {
+  // Manual previews derive directly from props without another state update.
+  const data = useMemo(() => {
     if (manualTotal !== undefined && manualInfected !== undefined) {
       const humans = Math.max(0, manualTotal - manualInfected);
       const ratio = manualTotal > 0 ? (humans / manualTotal) * 100 : 0;
-      const customData: PopulationStateData = {
+      return {
         num_players: manualTotal,
         num_infected: manualInfected,
         num_humans: humans,
         survived_pct: Number(ratio.toFixed(1)),
       };
-      setData(customData);
-      onUpdate?.(customData);
     }
-  }, [manualTotal, manualInfected, onUpdate]);
+    return receivedData;
+  }, [manualTotal, manualInfected, receivedData]);
+  useEffect(() => {
+    if (manualTotal !== undefined && manualInfected !== undefined) onUpdate?.(data);
+  }, [data, manualTotal, manualInfected, onUpdate]);
 
   // HTTP Fetch function (used on mount & as fallback)
   const fetchHttpState = useCallback(async () => {
@@ -116,10 +134,9 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
     const timeout = window.setTimeout(() => controller.abort(), 8000);
 
     try {
-      const res = await fetch(`${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
+      const { response: res, data: json } = await gameRequest<PopulationStateData>('state.sync', `${apiBaseUrl}/population-state`, { signal: controller.signal, cache: 'no-store' });
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
       if (res.ok) {
-        const json = await res.json();
         // An older HTTP request must not overwrite a more recent pushed state.
         if (sequence !== updateSequenceRef.current) return;
         const total = manualTotal ?? json.num_players ?? 0;
@@ -128,6 +145,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         const pct = json.survived_pct ?? (total > 0 ? (humans / total) * 100 : 0);
 
         const updated: PopulationStateData = {
+          round_id: json.round_id, telemetry: json.telemetry,
           num_players: total,
           num_infected: infected,
           num_humans: humans,
@@ -148,11 +166,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           host_connected: json.host_connected, players: json.players,
         };
 
-        setData(updated);
-        updateSequenceRef.current++;
-        setIsConnected(true);
-        setError(null);
-        onUpdate?.(updated);
+        applyState(updated, 'http');
       }
     } catch (err: unknown) {
       if (sequence !== updateSequenceRef.current) return;
@@ -162,7 +176,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
       clearTimeout(timeout);
       httpPendingRef.current = false;
     }
-  }, [apiBaseUrl, manualTotal, manualInfected, onUpdate]);
+  }, [apiBaseUrl, manualTotal, manualInfected, applyState]);
 
   // WebSocket lifecycle management
   useEffect(() => {
@@ -172,9 +186,11 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
     const targetWsUrl = wsUrl || `${apiBaseUrl.replace(/^http/, 'ws')}/ws/population`;
     let isUnmounted = false;
+    let reconnects = 0;
 
     const connectWebSocket = () => {
       if (isUnmounted) return;
+      if (reconnects > 0) gameLog('feed.reconnecting', { retry_count: reconnects, transport: 'websocket' });
 
       try {
         const socket = new WebSocket(targetWsUrl);
@@ -187,6 +203,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           }
           setIsWebSocketActive(true);
           setError(null);
+          gameLog('feed.connected', { retry_count: reconnects, transport: 'websocket' });
         };
 
         socket.onmessage = (event) => {
@@ -198,6 +215,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
             const pct = rawData.survived_pct ?? (total > 0 ? (humans / total) * 100 : 0);
 
             const updated: PopulationStateData = {
+              round_id: rawData.round_id, telemetry: rawData.telemetry,
               num_players: total,
               num_infected: infected,
               num_humans: humans,
@@ -218,20 +236,18 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
               host_connected: rawData.host_connected, players: rawData.players,
             };
 
-            setData(updated);
-            updateSequenceRef.current++;
-            setIsConnected(true);
-            setError(null);
-            onUpdate?.(updated);
+            applyState(updated, 'websocket');
           } catch (e) {
-            console.error('Error parsing WebSocket message:', e);
+            reportFailure('feed.invalid_message', e, { transport: 'websocket', outcome: 'invalid_message' });
           }
         };
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
           setIsWebSocketActive(false);
           setIsConnected(false);
           if (!isUnmounted) {
+            reconnects++;
+            gameLog('feed.disconnected', { close_code: event.code, retry_count: reconnects, transport: 'websocket' }, 'warn');
             // Schedule reconnection attempt
             reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 2000);
           }
@@ -240,10 +256,13 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         socket.onerror = () => {
           setIsWebSocketActive(false);
           setIsConnected(false);
+          if (!isUnmounted) gameLog('feed.failed', { transport: 'websocket' }, 'warn');
         };
       } catch (e) {
         setIsWebSocketActive(false);
         if (!isUnmounted) {
+          reconnects++;
+          reportFailure('feed.failed', e, { transport: 'websocket', retry_count: reconnects });
           reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 2000);
         }
       }
@@ -262,7 +281,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         socketRef.current.close();
       }
     };
-  }, [useWebSocket, wsUrl, apiBaseUrl, manualTotal, manualInfected, fetchHttpState, onUpdate]);
+  }, [useWebSocket, wsUrl, apiBaseUrl, manualTotal, manualInfected, fetchHttpState, applyState]);
 
   // Also refresh occasionally with a socket open: host connectivity can expire
   // without a population change, and an idle dashboard socket can be stale.
