@@ -75,12 +75,20 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   showLiveIndicator = false,
 }) => {
   const effectiveFallbackInterval = pollIntervalMs ?? fallbackPollIntervalMs;
-  const [data, setData] = useState<PopulationStateData>({
+  const [receivedData, setData] = useState<PopulationStateData>({
     num_players: manualTotal ?? 0,
     num_infected: manualInfected ?? 0,
     num_humans: Math.max(0, (manualTotal ?? 0) - (manualInfected ?? 0)),
     survived_pct: 0.0,
   });
+  // Manual preview values are derived from props instead of copying props into state.
+  const manualHumans = Math.max(0, (manualTotal ?? 0) - (manualInfected ?? 0));
+  const data: PopulationStateData = manualTotal !== undefined && manualInfected !== undefined ? {
+    num_players: manualTotal,
+    num_infected: manualInfected,
+    num_humans: manualHumans,
+    survived_pct: Number((manualTotal > 0 ? (manualHumans / manualTotal) * 100 : 0).toFixed(1)),
+  } : receivedData;
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isWebSocketActive, setIsWebSocketActive] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +110,6 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         num_humans: humans,
         survived_pct: Number(ratio.toFixed(1)),
       };
-      setData(customData);
       onUpdate?.(customData);
     }
   }, [manualTotal, manualInfected, onUpdate]);
@@ -241,7 +248,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           setIsWebSocketActive(false);
           setIsConnected(false);
         };
-      } catch (e) {
+      } catch {
         setIsWebSocketActive(false);
         if (!isUnmounted) {
           reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 2000);
@@ -250,11 +257,14 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
     };
 
     // Initial HTTP fetch so data shows up instantly while WS connects
-    fetchHttpState();
-    connectWebSocket();
+    const initialConnection = window.setTimeout(() => {
+      void fetchHttpState();
+      connectWebSocket();
+    }, 0);
 
     return () => {
       isUnmounted = true;
+      window.clearTimeout(initialConnection);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -269,9 +279,12 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   useEffect(() => {
     if (effectiveFallbackInterval <= 0) return;
 
-    fetchHttpState();
+    const initialPoll = window.setTimeout(() => void fetchHttpState(), 0);
     const interval = setInterval(fetchHttpState, isWebSocketActive ? Math.max(10_000, effectiveFallbackInterval) : effectiveFallbackInterval);
-    return () => clearInterval(interval);
+    return () => {
+      window.clearTimeout(initialPoll);
+      clearInterval(interval);
+    };
   }, [isWebSocketActive, effectiveFallbackInterval, fetchHttpState]);
 
   // Derived percentages for progress bar rendering
