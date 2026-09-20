@@ -14,6 +14,12 @@ using the round and boot IDs, rather than keeping a span open for an entire game
 
 ## Configuration
 
+For both the React/browser project and the Cloudflare/backend project, select
+Error monitoring, Logging, and Tracing. Leave Session replay and Application
+Metrics off. Replay is opt-in in the browser code: both sampling rates default
+to zero, and the recorder integration is omitted unless a positive rate is
+explicitly configured. Application Metrics is disabled in both SDKs.
+
 Use a browser project and a Cloudflare project in the same Sentry organization.
 Select both projects when looking for traces that cross the browser/backend
 boundary. You can also use one JavaScript project and distinguish `component`
@@ -29,8 +35,8 @@ ingestion address, not its management API credential.
 | Frontend build | `VITE_SENTRY_ENVIRONMENT` | Environment such as `staging` or `production`. |
 | Frontend build | `VITE_SENTRY_RELEASE` | Release identifier, ideally the commit SHA. |
 | Frontend build | `VITE_SENTRY_TRACES_SAMPLE_RATE` | Trace sampling, default `0.1`. |
-| Frontend build | `VITE_SENTRY_REPLAY_SESSION_SAMPLE_RATE` | Normal session recording, default `0.05`. |
-| Frontend build | `VITE_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE` | Replay buffer on errors, default `1`. |
+| Frontend build | `VITE_SENTRY_REPLAY_SESSION_SAMPLE_RATE` | Normal session recording, default `0` (off). |
+| Frontend build | `VITE_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE` | Replay buffer on errors, default `0` (off). |
 | Frontend build | `VITE_API_BASE` | Game API URL; trace headers are restricted to this API. |
 | Worker variable | `SENTRY_DSN` | Backend project's DSN; empty disables delivery. |
 | Worker variable | `SENTRY_ENVIRONMENT` | Match the frontend environment. |
@@ -81,7 +87,8 @@ source-map upload is optional and is not configured by this change.
 
 Use a disposable staging game. Temporarily set both trace rates and the normal
 Replay session rate to `1`, rebuild the dashboard, and use the same staging
-environment on both SDKs. Restore the normal rates after the demonstration.
+environment on both SDKs. Replay demonstration is optional; keep both Replay
+rates at `0` if you do not want recording. Restore the normal rates after the demonstration.
 
 1. Open the dashboard at its plain `/` URL, without a query string or fragment.
    Leave it open and interact with the page. In **Replays**, select the browser

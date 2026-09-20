@@ -24,6 +24,8 @@ export function initializeTelemetry() {
   // This dashboard has no routed/query-driven UI. Do not record a URL that could
   // contain a pasted credential; replay's DOM recorder owns its initial URL.
   const replayAllowed = ['/', '/index.html'].includes(location.pathname) && !location.search && !location.hash;
+  const replaySessionRate = replayAllowed ? sampleRate(import.meta.env.VITE_SENTRY_REPLAY_SESSION_SAMPLE_RATE, 0) : 0;
+  const replayOnErrorRate = replayAllowed ? sampleRate(import.meta.env.VITE_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE, 0) : 0;
   const apiPattern = new RegExp(`^${new URL(API_BASE, location.origin).href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:/|$)`);
   Sentry.init({
     dsn: import.meta.env.VITE_SENTRY_DSN,
@@ -33,6 +35,7 @@ export function initializeTelemetry() {
     dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false, stackFrameVariables: false, frameContextLines: 0, databaseQueryData: false, graphQL: { document: false, variables: false }, genAI: { inputs: false, outputs: false } },
     enhanceFetchErrorMessages: false,
     enableLogs: true,
+    enableMetrics: false,
     maxBreadcrumbs: 0,
     integrations: [
       Sentry.breadcrumbsIntegration({ console: false, dom: false, fetch: false, xhr: false, history: false }),
@@ -42,7 +45,7 @@ export function initializeTelemetry() {
         beforeStartSpan: options => ({ ...options, name: 'dashboard.load', attributes: {} }),
         shouldCreateSpanForRequest: url => apiPattern.test(url),
       }),
-      Sentry.replayIntegration({
+      ...(replaySessionRate > 0 || replayOnErrorRate > 0 ? [Sentry.replayIntegration({
         maskAllText: true, maskAllInputs: true, blockAllMedia: true,
         block: ['.sentry-block'],
         networkCaptureBodies: false, networkDetailAllowUrls: [],
@@ -51,12 +54,12 @@ export function initializeTelemetry() {
         beforeAddRecordingEvent: () => null,
         maxReplayDuration: 15 * 60_000,
         mutationLimit: 5_000,
-      }),
+      })] : []),
     ],
     tracePropagationTargets: [apiPattern],
     tracesSampleRate: sampleRate(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE, 0.1),
-    replaysSessionSampleRate: replayAllowed ? sampleRate(import.meta.env.VITE_SENTRY_REPLAY_SESSION_SAMPLE_RATE, 0.05) : 0,
-    replaysOnErrorSampleRate: replayAllowed ? sampleRate(import.meta.env.VITE_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE, 1) : 0,
+    replaysSessionSampleRate: replaySessionRate,
+    replaysOnErrorSampleRate: replayOnErrorRate,
     beforeSend: event => allErrorBudget('feed.failed') ? safeEvent(event) : null,
     beforeSendTransaction: safeEvent,
     beforeSendSpan: safeSpan,
