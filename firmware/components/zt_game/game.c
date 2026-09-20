@@ -1847,10 +1847,11 @@ static void peers_refresh(uint64_t now)
         view.selected_tier=view.contacts[i].tier; break;
     }
 }
-static void attempt(uint64_t now)
+static void attempt(uint64_t now,uint64_t pressed_us)
 {
     zt_clock_sample_t c; zt_wire_role_entry_t *r=self_role();
-    if (!clock_running(now,&c)) return;
+    /* Input queue latency cannot turn a countdown press into a live tag. */
+    if (!clock_running(now,&c) || pressed_us>now || now-pressed_us>(uint64_t)c.elapsed_ms*1000ULL) return;
     if (!r || r->role!=ZT_ROLE_ZOMBIE) { feedback(ZT_FEEDBACK_STAY_CLEAR,now); return; }
     if (cooldown_until>now || outbound.active || pending.id || r->cause_slot!=view.self_slot ||
         (!r->cause_seq && view.self_slot!=current.patient_zero_slot)) return;
@@ -1945,7 +1946,7 @@ static void button(const zt_button_edge_t *b,uint64_t now)
         }
         join_service(now); return;
     }
-    if (view.admission==ZT_ADMISSION_RUNNING) attempt(now);
+    if (view.admission==ZT_ADMISSION_RUNNING) attempt(now,b->at_us);
 }
 static void beacon_service(uint64_t now)
 {
