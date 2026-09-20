@@ -32,6 +32,11 @@ registration, too few registrations, an active round, a changed round and an
 unavailable server feature. Unsupported control endpoints stop automatic HTTP
 retries so they cannot keep interrupting live sync.
 
+The host retains queued peer RESET commands after its own local reset and
+continues forwarding archived cleanup for that round. Previously clearing the
+host also discarded those commands, and its stale-round guard rejected later
+retries before they could be relayed.
+
 The exact earlier B: RETRY rejection was not captured. A read-only endpoint
 check returned authenticated-route HTTP 401, and public state showed an empty
 lobby; the historical handoff's claim that the control endpoint was still

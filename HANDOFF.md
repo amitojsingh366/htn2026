@@ -17,6 +17,9 @@ server timestamp for dashboard clock alignment; readiness policy is unchanged.
 - START yields to queued registrations' first HTTP attempts. Rejected controls
   display specific registration/roster/round reasons. Unsupported endpoints
   stop automatic retries instead of repeatedly interrupting the live socket.
+- Host reset preserves queued peer cleanup commands and allows later remote
+  reset retries through the retired-round guard. Previously resetting the host
+  first could leave the other badges in their old game.
 - A single scheduled start time drives the five-second countdown. Role displays
   remain visible; timers and tag controls wait for zero, including queued
   button presses and radio tag requests captured before the start.

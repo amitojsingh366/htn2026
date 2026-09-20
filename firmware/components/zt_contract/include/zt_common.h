@@ -107,7 +107,7 @@ typedef enum {
 #define ZT_SNAPSHOT_REQUEST_INTERVAL_MS 5000
 #define ZT_ROUND_CLOSE_RETRY_MS 5000
 #define ZT_DECISION_RECEIPT_COALESCE_MS 500
-#define ZT_START_LEAD_MIN_MS 10000
+#define ZT_START_LEAD_MIN_MS 5000 /* Demo countdown; backend owns the scheduled start. */
 #define ZT_ANNOUNCE_MIN_LEN 1
 #define ZT_ANNOUNCE_MAX_LEN 96
 #define ZT_ANNOUNCE_QUEUE_CAPACITY 3
