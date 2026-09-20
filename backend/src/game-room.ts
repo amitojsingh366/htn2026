@@ -188,6 +188,7 @@ export class GameRoom extends DurableObject<Env> {
 
     const state: PopulationState = {
       ...this.gateway.dashboard(),
+      server_time_ms: Date.now(),
       num_players: row.num_players,
       num_infected: row.num_infected,
       num_humans: humans,

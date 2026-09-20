@@ -13,6 +13,7 @@ export interface PlayerRanking {
 }
 
 export interface PopulationState {
+  server_time_ms?: number;
   num_players: number;
   num_infected: number;
   num_humans: number;

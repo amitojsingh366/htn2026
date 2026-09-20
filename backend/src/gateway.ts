@@ -1,5 +1,8 @@
 /** Host-only gateway protocol; every event receipt follows durable ingestion. */
 const RULES = { duration_ms: 600_000, tag_rssi: -58, tag_cooldown_ms: 3000 };
+// One shared start timestamp for badges and dashboard after every PREPARE receipt.
+// Demo countdown; use 60_000 here for the full-game head start.
+const START_COUNTDOWN_MS = 5_000;
 const ZERO = "0000000000000000";
 const MAX_BYTES = 4096;
 const RESET_PEER_WINDOW_MS = 15_000;
@@ -792,7 +795,7 @@ export class HostGateway {
     if (m.resetSeq || m.startSeq || !m.prepareSeq || !m.roster.every(p => m.ready.includes(p.slot))) return;
     const random = new Uint32Array(1); crypto.getRandomValues(random);
     m.patientZero = m.roster[random[0] % m.roster.length].slot;
-    m.startTime = Date.now() + 15_000; m.phase = "running"; m.revision++; m.snapshotId++;
+    m.startTime = Date.now() + START_COUNTDOWN_MS; m.phase = "running"; m.revision++; m.snapshotId++;
     m.startSeq = this.command(m, "START_ROUND", { snapshot_id: m.snapshotId, roster_hash: m.rosterHash, patient_zero_slot: m.patientZero,
       initial_role_rev: 1, start_time_ms: m.startTime, duration_ms: RULES.duration_ms });
     for (const player of m.roster) this.saveRole(m, player.slot, this.role(m, player.slot));
