@@ -1,4 +1,6 @@
 /** Host-only gateway protocol; every event receipt follows durable ingestion. */
+import type { AnnouncementRequest, AnnouncementResult, DirectorObservation } from "./director-types";
+
 const RULES = { duration_ms: 600_000, tag_rssi: -58, tag_cooldown_ms: 3000 };
 const ZERO = "0000000000000000";
 const MAX_BYTES = 4096;
@@ -7,6 +9,9 @@ const COMMAND_BATCH_SIZE = 4; // Firmware gateway command queue capacity.
 const REPLAY_RETRY_MS = 1000;
 const CONTROL_HOST_FRESH_MS = 25_000;
 const CONTROL_HISTORY_LIMIT = 512;
+const DIRECTOR_ANNOUNCEMENT_INTERVAL_MS = 15_000;
+const DIRECTOR_ANNOUNCEMENT_TTL_MS = 60_000;
+const DIRECTOR_OUTBOX_LIMIT = 3;
 const textEncoder = new TextEncoder();
 type Json = Record<string, unknown>;
 type Player = { slot: number; id: string; name: string };
@@ -32,6 +37,7 @@ type Meta = {
 type Attachment = { is_gateway: true; gameId: string; welcomed: boolean; lastClientId: number; lastSeenAt?: number; replayTurn?: number; commandCursor?: number; commandSends?: Record<string, number>; decisionCursor?: string; decisionRepeatAt?: number; needCursor?: number; needRepeatAt?: number; prepareSeeded?: number; endSent?: number; finalSent?: number; resetRound?: string };
 type CommandRow = { seq: number; body: string; acknowledged: string };
 type ControlRow = { request: string; response: string; status: number };
+type AnnouncementRow = { request: string; result: string; command_seq: number | null; created_at: number; expires_at: number; round_id: string };
 type Cause = { slot: number; seq: number };
 type Role = { role: "H" | "Z"; role_rev: number; cause: Cause | null; covered_seq: number; infected_elapsed: number | null };
 type Infection = { id: string; victim: number; seq: number; actor: number; actor_cause: Cause; actor_role_rev: number; victim_role_rev: number;
@@ -114,6 +120,7 @@ export class HostGateway {
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO gateway_meta VALUES (1, ?)", JSON.stringify(initial()));
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_registrations (key TEXT PRIMARY KEY, request TEXT NOT NULL, response TEXT NOT NULL)");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_controls (request_id TEXT PRIMARY KEY, request TEXT NOT NULL, response TEXT NOT NULL, status INTEGER NOT NULL, created_at INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_director_announcements (action_id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT NOT NULL, command_seq INTEGER, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, round_id TEXT NOT NULL)");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_snapshots (snapshot_id INTEGER NOT NULL, page INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(snapshot_id,page))");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_commands (seq INTEGER PRIMARY KEY, body TEXT NOT NULL, acknowledged TEXT NOT NULL)");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS gateway_events (id TEXT PRIMARY KEY, round_id TEXT NOT NULL, victim INTEGER NOT NULL, seq INTEGER NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, reason TEXT, decision TEXT NOT NULL, role_rev INTEGER NOT NULL DEFAULT 0, UNIQUE(round_id,victim,seq))");
@@ -174,6 +181,84 @@ export class HostGateway {
       events_pending: events.find(r => r.status === "pending_dependency")?.count ?? 0,
       events_rejected: events.find(r => r.status === "rejected")?.count ?? 0,
       players: m.roster.map(p => ({ ...p, ...this.role(m, p.slot) })) };
+  }
+  /** Authoritative, bounded evidence for the director; excludes badge names and credentials. */
+  directorObservation(roomId: string): DirectorObservation {
+    const m = this.get();
+    const counts = this.ctx.storage.sql.exec<{status:string;count:number}>(
+      "SELECT status,COUNT(*) AS count FROM gateway_events WHERE round_id=? GROUP BY status", m.roundId ?? "").toArray();
+    const history = this.ctx.storage.sql.exec<{id:string;body:string;status:string}>(
+      "SELECT id,body,status FROM gateway_events WHERE round_id=? ORDER BY json_extract(body,'$.elapsed_ms') DESC,id DESC LIMIT 40", m.roundId ?? "").toArray().reverse().map(row => {
+      const event = JSON.parse(row.body) as Infection;
+      return { id: row.id, actor: event.actor, victim: event.victim, elapsedMs: event.elapsed_ms, status: row.status };
+    });
+    const infected = m.roster.filter(player => this.role(m, player.slot).role === "Z").length;
+    return { roomId, gameId: m.gameId, roundId: m.roundId, revision: m.revision, observedAt: Date.now(),
+      phase: m.resetSeq ? "resetting" : m.phase, startedAt: m.startTime || null,
+      endedAt: m.end ? m.startTime + m.end.effectiveElapsed : null, durationMs: RULES.duration_ms,
+      players: m.roster.length, infected, humans: m.roster.length - infected, winner: m.end?.winner ?? null,
+      final: Boolean(m.end?.final), hostConnected: this.sockets().length > 0, hostLastSeenAt: m.hostLastSeenAt ?? null,
+      pendingEvents: counts.find(row => row.status === "pending_dependency")?.count ?? 0,
+      rejectedEvents: counts.find(row => row.status === "rejected")?.count ?? 0,
+      acceptedEvents: counts.find(row => row.status === "accepted")?.count ?? 0, history };
+  }
+  directorAnnouncementResult(actionId: string): AnnouncementResult {
+    const row = this.ctx.storage.sql.exec<AnnouncementRow>(
+      "SELECT * FROM gateway_director_announcements WHERE action_id=?", actionId).toArray()[0];
+    if (!row) return { status: "rejected", reason: "Unknown action" };
+    const result = JSON.parse(row.result) as AnnouncementResult;
+    if (!row.command_seq) return result;
+    const command = this.ctx.storage.sql.exec<CommandRow>("SELECT seq,body,acknowledged FROM gateway_commands WHERE seq=?", row.command_seq).toArray()[0];
+    const acknowledged = command ? JSON.parse(command.acknowledged) as number[] : [];
+    const m = this.get();
+    const roster = m.roundId === row.round_id ? m.roster : this.archive(row.round_id)?.roster ?? [];
+    const delivered = roster.length > 0 && roster.every(player => acknowledged.includes(player.slot));
+    return { ...result, acknowledged, reason: delivered ? "Applied by all rostered badges" :
+      Date.now() >= row.expires_at || m.roundId !== row.round_id || m.phase !== "running" ?
+        "Expired or round closed; no further delivery attempts" : "Queued; awaiting badge acknowledgements" };
+  }
+  /** The action identity and command commit together before any gateway send. */
+  sendDirectorAnnouncement(request: AnnouncementRequest): AnnouncementResult {
+    if (typeof request?.actionId !== "string" || !/^[A-Za-z0-9/_:-]{1,160}$/.test(request.actionId))
+      return { status: "rejected", reason: "Invalid action identity" };
+    const canonical = JSON.stringify({ roundId: request.roundId, revision: request.revision, text: request.text, expiresAt: request.expiresAt });
+    const saved = this.ctx.storage.sql.exec<AnnouncementRow>(
+      "SELECT * FROM gateway_director_announcements WHERE action_id=?", request.actionId).toArray()[0];
+    if (saved) {
+      if (saved.request !== canonical) return { status: "rejected", reason: "Action identity reused with different content" };
+      const result = this.directorAnnouncementResult(request.actionId);
+      return result.status === "queued" ? { ...result, status: "duplicate" } : result;
+    }
+    const m = this.get(), now = Date.now();
+    let reason: string | undefined;
+    if (this.env.DIRECTOR_ENABLED !== "true" || m.gameId !== this.env.DIRECTOR_GAME_ID) reason = "Director disabled for this game";
+    else if (!m.roundId || request.roundId !== m.roundId || request.revision !== m.revision) reason = "Stale round or revision";
+    else if (m.phase !== "running" || m.resetSeq || m.end || !m.startSeq || now < m.startTime || now >= m.startTime + RULES.duration_ms) reason = "Round is not active";
+    else if (!this.sockets().length || !m.hostLastSeenAt || now - m.hostLastSeenAt > CONTROL_HOST_FRESH_MS) reason = "Host disconnected or stale";
+    else if (!Number.isSafeInteger(request.expiresAt) || request.expiresAt <= now || request.expiresAt > now + DIRECTOR_ANNOUNCEMENT_TTL_MS) reason = "Expiry must be within the next 60 seconds";
+    else if (typeof request.text !== "string" || !request.text.trim() || request.text.length > 96 || /[^\x20-\x7e]|[<>`*_#\[\]{}]/.test(request.text)) reason = "Use 1 to 96 printable ASCII characters without markup";
+    const recent = this.ctx.storage.sql.exec<AnnouncementRow>(
+      "SELECT * FROM gateway_director_announcements WHERE round_id=? AND command_seq IS NOT NULL ORDER BY created_at DESC", m.roundId ?? "").toArray();
+    if (!reason && recent.length && now - recent[0].created_at < DIRECTOR_ANNOUNCEMENT_INTERVAL_MS) reason = "Announcements require 15 seconds of spacing";
+    if (!reason && recent.filter(row => {
+      if (row.expires_at <= now) return false;
+      const command = this.ctx.storage.sql.exec<CommandRow>("SELECT seq,body,acknowledged FROM gateway_commands WHERE seq=?", row.command_seq).toArray()[0];
+      const acknowledged = command ? JSON.parse(command.acknowledged) as number[] : [];
+      return m.roster.some(player => !acknowledged.includes(player.slot));
+    }).length >= DIRECTOR_OUTBOX_LIMIT) reason = "Badge announcement queue is full";
+    const expiresAt = Number.isSafeInteger(request.expiresAt) ? Math.min(request.expiresAt, m.startTime + RULES.duration_ms) : now;
+    let result: AnnouncementResult = { status: "rejected", reason: reason ?? "Unable to queue announcement" };
+    this.ctx.storage.transactionSync(() => {
+      if (!reason) {
+        const commandSeq = this.command(m, "ANNOUNCE", { text: request.text, valid_until_elapsed_ms: expiresAt - m.startTime });
+        this.put(m);
+        result = { status: "queued", reason: "Queued; awaiting badge acknowledgements", commandSeq, acknowledged: [] };
+      }
+      this.ctx.storage.sql.exec("INSERT INTO gateway_director_announcements VALUES(?,?,?,?,?,?,?)",
+        request.actionId, canonical, JSON.stringify(result), result.commandSeq ?? null, now, expiresAt, typeof request.roundId === "string" ? request.roundId : "");
+    });
+    if (result.status === "queued") for (const ws of this.sockets()) this.replay(ws);
+    return result;
   }
   assertLegacyMutation(): void {
     if (this.enabled()) throw new GatewayError("GATEWAY_GAME", "Live badge state is controlled by the host gateway.");
@@ -481,6 +566,8 @@ export class HostGateway {
     const commands = saved.filter(row => {
       const c = row.command;
       if (c.round_id !== m.roundId || (m.resetSeq ? c.type !== "RESET_GAME" : c.type === "RESET_GAME")) return false;
+      if (c.type === "ANNOUNCE" && (m.phase !== "running" || m.end || Date.now() < m.startTime ||
+        typeof c.valid_until_elapsed_ms !== "number" || Date.now() >= m.startTime + c.valid_until_elapsed_ms)) return false;
       // A reconnected host still needs the frozen PREPARE in its relay cache
       // for returning clients, even after every original readiness ACK arrived.
       if (m.startSeq && row.seq === m.prepareSeq) return a.prepareSeeded !== row.seq;

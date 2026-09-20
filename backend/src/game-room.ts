@@ -1,5 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import { getAgentByName } from "agents";
 import { HostGateway } from "./gateway";
+import type { AnnouncementRequest, AnnouncementResult, DirectorObservation, DirectorStatus } from "./director-types";
+import { initialDirectorState, limits } from "./director-policy";
 import type {
   DeviceEventInput,
   DeviceStateResponse,
@@ -90,6 +93,25 @@ export class GameRoom extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     await this.gateway.alarm();
+  }
+
+  getDirectorObservation(): DirectorObservation {
+    return this.gateway.directorObservation(this.ctx.id.toString());
+  }
+
+  sendDirectorAnnouncement(request: AnnouncementRequest): AnnouncementResult {
+    return this.gateway.sendDirectorAnnouncement(request);
+  }
+
+  getDirectorAnnouncementResult(actionId: string): AnnouncementResult {
+    return this.gateway.directorAnnouncementResult(actionId);
+  }
+
+  async getDirectorStatus(gameId: string): Promise<DirectorStatus> {
+    if (gameId !== this.env.DIRECTOR_GAME_ID) return { ...initialDirectorState(),
+      reason: "Director is disabled for this game.", enabled: false, configured: Boolean(this.env.OPENAI_API_KEY), limits: limits(this.env) };
+    const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
+    return agent.getStatus();
   }
 
   calculateRankings(): PlayerRanking[] {
@@ -656,6 +678,18 @@ export class GameRoom extends DurableObject<Env> {
 
     if (state.game_over) {
       this.broadcastGameOverToDevices();
+    }
+
+    // Agent work is outside the gameplay response path and cannot reject a
+    // durable infection receipt or prevent ordinary gateway replay.
+    if (this.env.DIRECTOR_ENABLED === "true") {
+      const observation = this.getDirectorObservation();
+      if (observation.gameId === this.env.DIRECTOR_GAME_ID) {
+        this.ctx.waitUntil((async () => {
+          const agent = await getAgentByName(this.env.OUTBREAK_DIRECTOR, this.ctx.id.toString());
+          await agent.observe(observation);
+        })().catch(() => { console.warn("Outbreak director notification unavailable"); }));
+      }
     }
 
     return state;

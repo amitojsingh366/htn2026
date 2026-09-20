@@ -1,6 +1,7 @@
 import { DEFAULT_GAME_ID } from "./types";
 
 export { GameRoom } from "./game-room";
+export { OutbreakDirector } from "./outbreak-director";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -72,6 +73,11 @@ export default {
 
         case "/population-state":
           return json(await stub.getState());
+
+        case "/director": {
+          try { return json(await stub.getDirectorStatus(gameId)); }
+          catch { return json({ status: "degraded", reason: "Director temporarily unavailable" }, 503); }
+        }
 
         case "/num-players":
           return json({ num_players: (await stub.getState()).num_players });
