@@ -182,9 +182,15 @@ static const char *host_connection_detail(const zt_ui_snapshot_t *s)
     if (error != ZT_OK) return "SERVER LINK ERROR";
     return "CONNECTING TO SERVER";
 }
+static bool host_control_needs_update(const zt_ui_snapshot_t *s)
+{
+    return s->host_control_error == ZT_ERR_NOT_IMPLEMENTED ||
+        s->host_control_error == ZT_ERR_UNSUPPORTED_VERSION;
+}
 static const char *host_control_detail(const zt_ui_snapshot_t *s)
 {
     switch (s->host_control_error) {
+    case ZT_ERR_NOT_IMPLEMENTED: case ZT_ERR_UNSUPPORTED_VERSION: return "ASK OPERATOR TO UPDATE SERVER";
     case ZT_ERR_AUTH: return "HOST AUTH ERROR";
     case ZT_ERR_INVALID_STATE: return "SERVER NOT READY";
     case ZT_ERR_CONFLICT: case ZT_ERR_STALE: return "ROUND CHANGED - SYNC AGAIN";
@@ -413,6 +419,7 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         text(&c,12,12,"LOBBY",16,3,FG);
         text(&c,12,48,s->name,ZT_NAME_MAX_LEN,3,BLUE);
         const char *state = s->host_control_pending && s->host_control == ZT_HOST_CONTROL_START ? "STARTING GAME" :
+            s->host_control == ZT_HOST_CONTROL_START && host_control_needs_update(s) ? "SERVER UPDATE NEEDED" :
             s->host_control == ZT_HOST_CONTROL_START && s->host_control_error != ZT_OK ? "START FAILED - B: RETRY" :
             s->host_can_start ? "B: START GAME" :
             s->admission == ZT_ADMISSION_NEXT_ROUND ? "NEXT ROUND" :
@@ -466,7 +473,8 @@ zt_err_t zt_ui_render_view_stripe(const zt_ui_snapshot_t *s, zt_screen_t screen,
         if (s->host_control_pending && s->host_control == ZT_HOST_CONTROL_RESET)
             text(&c,12,177,"RESETTING GAME",26,2,YELLOW);
         else if (s->host_can_reset)
-            text(&c,12,177,s->host_control_error != ZT_OK ? "RESET FAILED - B: RETRY" : "B: RESET GAME",26,2,YELLOW);
+            text(&c,12,177,host_control_needs_update(s) ? "SERVER UPDATE NEEDED" :
+                 s->host_control_error != ZT_OK ? "RESET FAILED - B: RETRY" : "B: RESET GAME",26,2,YELLOW);
         else if (!s->server_connected || s->pending_event_count || !s->result_final)
             text(&c,12,179,s->host_selected && s->host_configured ? "WAITING FOR SERVER TO SYNC" : "RECONNECT TO HOST TO SYNC",40,1,FG);
         else

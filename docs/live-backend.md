@@ -21,6 +21,17 @@ prevent retries from operating on a later lobby or round. Reset is available onl
 after the server has ended that round; start still requires at least two saved
 registrations, including the host, and durable preparation by every player.
 
+The matching backend must be deployed for either host button to work; flashing
+firmware alone does not install the `/gateway/control` route or server-side
+winner handling. An older server can return HTTP 426 because it routes the
+unknown control path to its WebSocket handler. Firmware now treats HTTP
+404/405/426/501 from that control request as an unavailable server feature,
+shows **SERVER UPDATE NEEDED**, and stops retrying that button request so live
+sync can reconnect. The operator must update the matching backend (and verify
+the configured game if the server returned 404), then press B again. Network
+failures still retry the same request identity. No firmware fallback invokes
+the dashboard's separate start/reset routes.
+
 ## Private build configuration
 
 The ignored `private/zt_gateway_private.h` supplies `ZT_PRIVATE_GATEWAY_TOKEN`.

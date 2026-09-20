@@ -83,7 +83,11 @@ static zt_err_t request(const char *path, const char *body, const char *key, boo
         g->stopped=1; return ZT_ERR_AUTH;
     }
     if (control && status==409) return ZT_ERR_CONFLICT;
-    if (control && status==404) return ZT_ERR_NOT_FOUND;
+    /* Older servers route an unknown gateway path to the WebSocket handler,
+     * which responds 426. These responses require a server update, not another
+     * HTTPS attempt that tears down a healthy live socket on every retry. */
+    if (control && (status==404 || status==405 || status==426 || status==501))
+        return ZT_ERR_NOT_IMPLEMENTED;
     /* Registration payload rejection belongs to that badge. It must not shut
      * down the shared gateway or prevent other queued badges registering. */
     if (body && (status==400 || status==422)) return ZT_ERR_INVALID_ARG;
