@@ -198,6 +198,19 @@ static zt_err_t queue_commands(const zt_gateway_commands_t *batch)
         if (g->resetting && c->type!=ZT_CMD_RESET_GAME) continue;
         for (unsigned j=0;j<g->command_count;++j) if (g->commands[j].seq==c->seq && g->commands[j].round_id==c->round_id) { exists=true; break; }
         if (exists) continue;
+        if (c->type==ZT_CMD_ANNOUNCE) {
+            if (c->round_id!=g->round) continue;
+            unsigned announcements=0;
+            for (unsigned j=0;j<g->command_count;++j) if (g->commands[j].type==ZT_CMD_ANNOUNCE) ++announcements;
+            if (announcements>=ZT_ANNOUNCE_QUEUE_CAPACITY) continue;
+        } else if (g->command_count==GW_COMMANDS) {
+            /* Dropped cosmetics remain eligible for bounded server replay, but
+             * cannot block a state-changing command from entering the bridge. */
+            for (unsigned j=0;j<g->command_count;++j) if (g->commands[j].type==ZT_CMD_ANNOUNCE) {
+                memmove(g->commands+j,g->commands+j+1,(--g->command_count-j)*sizeof(g->commands[0]));
+                break;
+            }
+        }
         if (g->command_count==GW_COMMANDS && (c->type==ZT_CMD_END_ROUND || c->type==ZT_CMD_FINAL_RESULT)) {
             /* The server retains unacknowledged commands. Make room for a
              * terminal state rather than let old admission work delay game over. */
@@ -340,8 +353,18 @@ static void commands_service(uint64_t now)
     if (!g->command_count) return;
     unsigned index=0;
     for (unsigned i=0;i<g->command_count;++i)
+        if (g->commands[i].type!=ZT_CMD_ANNOUNCE) { index=i; break; }
+    for (unsigned i=0;i<g->command_count;++i)
         if (g->commands[i].type==ZT_CMD_END_ROUND || g->commands[i].type==ZT_CMD_FINAL_RESULT) { index=i; break; }
     zt_gateway_command_t *c=&g->commands[index]; zt_checkpoint_t cp;
+    if (c->type==ZT_CMD_ANNOUNCE) {
+        zt_clock_sample_t clock;
+        if (c->round_id!=g->round || zt_clock_read(now,&clock)!=ZT_OK || clock.quality!=ZT_TIME_INITIALIZED ||
+            clock.elapsed_ms<0 || (uint32_t)clock.elapsed_ms>=c->valid_until_elapsed_ms) {
+            memmove(g->commands+index,g->commands+index+1,(--g->command_count-index)*sizeof(g->commands[0]));
+            return;
+        }
+    }
     if (!zt_game_admission_enabled() && c->type!=ZT_CMD_RESET_GAME) return;
     if (c->type!=ZT_CMD_RESET_GAME && (zt_store_load_checkpoint(c->round_id,&cp)!=ZT_OK || cp.round_id!=c->round_id)) return;
     zt_server_command_t target={.round_id=c->round_id,.server_id=0,
