@@ -1,13 +1,16 @@
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getAgentByName } from "agents";
 import { HostGateway } from "../src/gateway";
+import type { GameRoom } from "../src/game-room";
+import { initialDirectorState } from "../src/director-policy";
 import type { AnnouncementRequest } from "../src/director-types";
 
 const GAME = "director-gateway-test";
 const ROUND = "abcdef0123456789";
 beforeEach(() => { vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("External network is disabled in gateway tests")); });
 afterEach(() => { vi.restoreAllMocks(); });
-type Fixture = { gateway: HostGateway; state: DurableObjectState; socket: WebSocket; now: number; request: AnnouncementRequest; messages: Array<Record<string, unknown>> };
+type Fixture = { instance: GameRoom; gateway: HostGateway; state: DurableObjectState; socket: WebSocket; now: number; request: AnnouncementRequest; messages: Array<Record<string, unknown>> };
 
 function changeMeta(state: DurableObjectState, changes: Record<string, unknown>) {
   const current = JSON.parse(state.storage.sql.exec<{body:string}>("SELECT body FROM gateway_meta WHERE id=1").one().body);
@@ -16,7 +19,7 @@ function changeMeta(state: DurableObjectState, changes: Record<string, unknown>)
 
 async function withGateway(name: string, exercise: (fixture: Fixture) => void | Promise<void>) {
   const stub = env.GAME_ROOM.getByName(name);
-  await runInDurableObject(stub, async (_instance, state) => {
+  await runInDurableObject(stub, async (instance, state) => {
     const now = Date.now();
     changeMeta(state, { gameId: GAME, roundId: ROUND, revision: 7, phase: "running", startSeq: 1,
       commandSeq: 1, startTime: now - 100_000, patientZero: 0, hostLastSeenAt: now,
@@ -29,7 +32,7 @@ async function withGateway(name: string, exercise: (fixture: Fixture) => void | 
     pair[0].addEventListener("message", event => { messages.push(JSON.parse(String(event.data))); });
     const gateway = new HostGateway(state, { ...env, DIRECTOR_ENABLED: "true", DIRECTOR_GAME_ID: GAME }, () => {});
     const request = { actionId: "run:1:call:1", roundId: ROUND, revision: 7, text: "Two survivors remain. Stay alert!", expiresAt: now + 60_000 };
-    try { await exercise({ gateway, state, socket: pair[1], now, request, messages }); }
+    try { await exercise({ instance, gateway, state, socket: pair[1], now, request, messages }); }
     finally { pair[0].close(); pair[1].close(); }
   });
 }
@@ -153,5 +156,56 @@ describe("Director gateway integration", () => {
     const response = await SELF.fetch("https://example.com/api/v1/games/unconfigured/director");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ enabled: false, status: "disabled" });
+  });
+
+  it("refreshes badge receipts through GameRoom to Agent to GameRoom RPC without a model call", async () => {
+    await withGateway("director-status-reentry", async ({ gateway, state, socket, request }) => {
+      const queued = gateway.sendDirectorAnnouncement(request);
+      expect(queued.status).toBe("queued");
+      const observation = gateway.directorObservation(state.id.toString());
+      const director = await getAgentByName(env.OUTBREAK_DIRECTOR, state.id.toString());
+      await runInDurableObject(director, agent => {
+        agent.setState({ ...initialDirectorState(), latest: observation, actions: [{
+          id: request.actionId, at: Date.now(), roundId: ROUND, tool: "send_announcement",
+          arguments: { text: request.text }, result: { status: "queued", reason: "Awaiting receipts", commandSeq: queued.commandSeq! },
+        }] });
+      });
+      await acknowledge(gateway, socket, queued.commandSeq!, 0);
+      const room = env.GAME_ROOM.get(state.id);
+      const status = await room.getDirectorStatus(env.DIRECTOR_GAME_ID);
+      expect(status.actions[0].result).toMatchObject({ status: "queued", commandSeq: queued.commandSeq, acknowledged: [0] });
+      expect(status.latest?.roomId).toBe(state.id.toString());
+      expect(status.dailyUsage.requests).toBe(0);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("automatically stores gateway observations and schedules a durable wake outside gameplay", async () => {
+    await withGateway("director-automatic-observation", async ({ instance, state, socket }) => {
+      changeMeta(state, { gameId: env.DIRECTOR_GAME_ID });
+      const director = await getAgentByName(env.OUTBREAK_DIRECTOR, state.id.toString());
+      // Keep the scheduled turn in the future while verifying the real event
+      // hook and SQLite-backed SDK scheduler without issuing an API request.
+      await runInDurableObject(director, agent => {
+        agent.setState({ ...initialDirectorState(), lastRunAt: Date.now() + 60_000 });
+      });
+      await instance.webSocketClose(socket, 1000, "Host temporarily offline");
+      await expect.poll(async () => (await director.getStatus()).pending?.scheduleId).toBeTruthy();
+      const status = await director.getStatus();
+      expect(status.latest).toMatchObject({ gameId: env.DIRECTOR_GAME_ID, roundId: ROUND, hostConnected: false, infected: 1 });
+      expect(status.observations).toHaveLength(1);
+      expect(status.pending).toMatchObject({ roundId: ROUND, trigger: "round_prepared" });
+      expect(status.status).toBe("waiting");
+      const persisted = await runInDurableObject(director, async (agent, agentState) => ({
+        scheduleIds: (await agent.listSchedules()).map(schedule => schedule.id),
+        alarm: await agentState.storage.getAlarm(),
+      }));
+      expect(persisted.scheduleIds).toContain(status.pending!.scheduleId);
+      expect(persisted.alarm).not.toBeNull();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      await director.cancelSchedule(status.pending!.scheduleId!);
+      // Stop the fixture's normal WebSocket close from creating another hook.
+      changeMeta(state, { gameId: GAME });
+    });
   });
 });
