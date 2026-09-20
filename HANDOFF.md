@@ -38,6 +38,17 @@ recognized by the running backend. The exact earlier B: RETRY rejection was not
 captured; no live start/reset request was issued to reproduce it. Evidence files
 are ignored under `.orchestration/live-control-get.json` and `live-state.json`.
 
+Final ESP-IDF 5.5.3 build and offline packaging passed from clean source
+`901568e0cfaa53c2b02042d247ae96b57af14f70`. Build log:
+`.orchestration/build-liveg011-final.log`. Newest release in this worktree:
+`.orchestration/releases/dev-20260920T100642.073717Z/release-manifest.json`.
+App size: 1,321,744 bytes; SHA-256:
+`2bd90814358113075d8bee70829d6c8c0350cbcb0de6ddfe432fd1180272ad60`.
+Backend typecheck and frontend production build passed. Use this worktree's
+guarded operator tool/release when flashing; the original main checkout's newest
+release is separate. The earlier LIVEG011 package ending `100222.559596Z` lacks
+late-reset pull recovery and is superseded by the release above.
+
 No deployment, flashing, serial access, hardware tests, simulations or automated
 test suites were performed. Firmware compilation, backend typechecking and
 frontend production compilation validate source only. The prior unused
