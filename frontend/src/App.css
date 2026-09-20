@@ -213,6 +213,170 @@
   50%      { box-shadow: 0 0 22px rgba(155, 109, 214, 0.5); }
 }
 
+/* ---------- Round banner / start control (from backend-comms, re-themed) ---------- */
+.btn-start-game {
+  border-color: rgba(181, 131, 41, 0.45);
+  color: var(--ember);
+}
+
+.btn-start-game:hover {
+  background: rgba(181, 131, 41, 0.14);
+  border-color: var(--ember);
+  color: #e8c77a;
+  box-shadow: 0 0 20px rgba(181, 131, 41, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.round-status-banner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 42%),
+    var(--glass-deep);
+  border: 1px solid var(--iron);
+  padding: 16px 20px;
+}
+
+.round-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.round-stat-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ash-dim);
+}
+
+.round-stat-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.status-waiting { color: var(--ash); }
+
+.status-active {
+  color: var(--rot-lit);
+  text-shadow: 0 0 12px var(--rot-glow);
+}
+
+.status-over {
+  color: var(--blood-lit);
+  text-shadow: 0 0 12px var(--blood-glow);
+}
+
+.round-timer-value {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--bone);
+  letter-spacing: 0.05em;
+}
+
+.patient-zero-tag {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ash);
+  width: fit-content;
+}
+
+.patient-zero-tag.active {
+  color: var(--blood-lit);
+  background: rgba(143, 13, 24, 0.14);
+  border: 1px solid rgba(217, 60, 60, 0.3);
+  padding: 2px 8px;
+}
+
+/* ---------- Final rankings ---------- */
+.leaderboard-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 42%),
+    var(--glass-deep);
+  border: 1px solid rgba(181, 131, 41, 0.28);
+  padding: 20px 24px;
+  box-shadow: var(--pall), 0 0 24px rgba(181, 131, 41, 0.07);
+}
+
+.leaderboard-header h3 {
+  margin: 0 0 16px 0;
+  font-family: var(--display);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: var(--bone);
+  font-weight: 700;
+}
+
+.table-responsive {
+  overflow-x: auto;
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.leaderboard-table th {
+  padding: 10px 14px;
+  font-family: var(--mono);
+  color: var(--ash-dim);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  border-bottom: 1px solid var(--iron-lit);
+}
+
+.leaderboard-table td {
+  padding: 12px 14px;
+  color: var(--ash);
+  border-bottom: 1px solid var(--iron);
+}
+
+.rank-winner {
+  background: rgba(181, 131, 41, 0.07);
+}
+
+.rank-badge {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--ember);
+}
+
+.device-id-cell {
+  font-family: var(--mono);
+  color: var(--bone);
+  font-weight: 600;
+}
+
+.role-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.role-infected {
+  background: rgba(143, 13, 24, 0.16);
+  color: var(--blood-lit);
+  border: 1px solid rgba(217, 60, 60, 0.3);
+}
+
+.role-human {
+  background: rgba(95, 138, 75, 0.16);
+  color: var(--rot-lit);
+  border: 1px solid rgba(110, 160, 86, 0.32);
+}
+
 /* ---------- Usage guide (folded) ---------- */
 
 .usage-guide {
@@ -244,6 +408,21 @@
 .usage-guide[open] summary::before { content: '▾ '; }
 
 .usage-guide summary:hover { color: var(--ash); }
+
+.guide-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ash);
+  margin: 12px 0 0;
+}
+
+.guide-desc code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--rot-lit);
+  background: rgba(95, 138, 75, 0.1);
+  padding: 2px 6px;
+}
 
 .code-block {
   font-family: var(--mono);

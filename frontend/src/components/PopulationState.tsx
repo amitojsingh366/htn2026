@@ -6,12 +6,21 @@ export interface PopulationStateData {
   num_infected: number;
   num_humans: number;
   survived_pct: number;
+  game_over?: boolean;
+  started_at?: number | null;
+  patient_zero_id?: string | null;
+  rankings?: Array<{
+    rank: number;
+    device_id: string;
+    state: string;
+    survival_time_seconds: number;
+  }>;
 }
 
 export interface PopulationStateProps {
-  /** Base URL for the FastAPI backend (e.g. "http://localhost:8000") */
+  /** Base URL for the Worker backend (e.g. "http://localhost:8787") */
   apiBaseUrl?: string;
-  /** Custom WebSocket URL (e.g. "ws://localhost:8000/ws/population"). Auto-derived from apiBaseUrl if omitted. */
+  /** Custom WebSocket URL (e.g. "ws://localhost:8787/ws/population"). Auto-derived from apiBaseUrl if omitted. */
   wsUrl?: string;
   /** Whether to use WebSocket for 0-latency live streaming. Defaults to true. */
   useWebSocket?: boolean;
@@ -32,7 +41,7 @@ export interface PopulationStateProps {
 }
 
 export const PopulationState: React.FC<PopulationStateProps> = ({
-  apiBaseUrl = 'http://localhost:8000',
+  apiBaseUrl = 'http://localhost:8787',
   wsUrl,
   useWebSocket = true,
   pollIntervalMs,
@@ -91,6 +100,10 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
           num_infected: infected,
           num_humans: survivors,
           survived_pct: Number(pct.toFixed(1)),
+          game_over: json.game_over,
+          started_at: json.started_at,
+          patient_zero_id: json.patient_zero_id,
+          rankings: json.rankings,
         };
 
         setData(updated);
@@ -142,6 +155,10 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
               num_infected: infected,
               num_humans: survivors,
               survived_pct: Number(pct.toFixed(1)),
+              game_over: rawData.game_over,
+              started_at: rawData.started_at,
+              patient_zero_id: rawData.patient_zero_id,
+              rankings: rawData.rankings,
             };
 
             setData(updated);
