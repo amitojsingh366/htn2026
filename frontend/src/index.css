@@ -1,65 +1,180 @@
+/* ==========================================================================
+   Global theme — "Crypt": dark gothic / outbreak-horror
+   Palette, typography, page atmosphere (plate, vignette, scanlines, grain).
+   ========================================================================== */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* Surfaces — all but lightless, with a cold violet cast */
+  --void: #030206;
+  --crypt: #08060e;
+  --crypt-deep: #050409;
+  --slab: #0c0912;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* Glass — panels that sit over the photographic plate */
+  --glass: rgba(9, 7, 14, 0.72);
+  --glass-deep: rgba(4, 3, 8, 0.82);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  /* Edges */
+  --iron: #1b1524;
+  --iron-lit: #2f2540;
+
+  /* Ink */
+  --bone: #ded4c4;
+  --ash: #8c8196;
+  --ash-dim: #5d5468;
+
+  /* Signals */
+  --blood: #8f0d18;
+  --blood-lit: #d93c3c;
+  --blood-glow: rgba(217, 60, 60, 0.4);
+  --rot: #5f8a4b;
+  --rot-lit: #8ebd72;
+  --rot-glow: rgba(110, 160, 86, 0.35);
+  --arcane: #8a5cc4;
+  --arcane-dim: rgba(138, 92, 196, 0.13);
+  --ember: #b58329;
+
+  /* Fog */
+  --fog: rgba(150, 150, 168, 0.05);
+  --fog-warm: rgba(140, 96, 104, 0.045);
+  --fog-cold: rgba(104, 132, 110, 0.04);
+
+  --pall: 0 18px 54px rgba(0, 0, 0, 0.85);
+
+  --display: 'Cinzel', 'Trajan Pro', Georgia, 'Times New Roman', serif;
+  --body: 'Crimson Pro', Georgia, 'Times New Roman', serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  font: 17px/1.55 var(--body);
+  color-scheme: dark;
+  color: var(--ash);
+  background: var(--void);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+@media (max-width: 1024px) {
+  :root { font-size: 16px; }
 }
+
+/* ---------- The plate ----------
+   The photographic backdrop, held still behind everything and pushed down
+   into the dark so text stays legible on top of it. */
 
 body {
   margin: 0;
-  background-color: #050811;
-  color: #e2e8f0;
   min-height: 100vh;
+  background-color: var(--void);
+  color: var(--ash);
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: -2vh -2vw;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url('./assets/temp.png');
+  background-size: cover;
+  background-position: center 38%;
+  filter: saturate(0.62) contrast(1.06) brightness(0.52);
+  animation: plate-breathe 46s ease-in-out infinite alternate;
+}
+
+/* An almost imperceptible push-in, so the still never reads as a dead JPEG */
+@keyframes plate-breathe {
+  from { transform: scale(1.02) translate3d(0, 0, 0); }
+  to   { transform: scale(1.08) translate3d(-0.8%, -0.6%, 0); }
+}
+
+/* ---------- Atmosphere stack ----------
+   One element carrying vignette + blood-light + rot-light + fog banks. */
+
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.atmosphere::before {
+  content: '';
+  position: absolute;
+  inset: -30vh -40vw;
+  background:
+    radial-gradient(38% 30% at 18% 78%, var(--fog), transparent 70%),
+    radial-gradient(46% 26% at 62% 92%, var(--fog-cold), transparent 72%),
+    radial-gradient(34% 22% at 78% 16%, var(--fog-warm), transparent 70%);
+  filter: blur(28px);
+  animation: fog-drift 96s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+@keyframes fog-drift {
+  from { transform: translate3d(-5%, 2%, 0) scale(1.05); }
+  to   { transform: translate3d(7%, -2%, 0) scale(1.18); }
+}
+
+/* Vignette + coloured rake-light, closing the room hard around the content */
+.atmosphere::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(85% 45% at 50% -8%, rgba(96, 10, 18, 0.26), transparent 70%),
+    radial-gradient(65% 38% at 50% 112%, rgba(34, 56, 28, 0.14), transparent 72%),
+    radial-gradient(
+      118% 84% at 50% 44%,
+      transparent 22%,
+      rgba(0, 0, 0, 0.46) 62%,
+      rgba(0, 0, 0, 0.8) 86%,
+      #000 100%
+    );
+}
+
+/* Scanlines + film grain — the broadcast-feed layer, above the atmosphere */
+.interference {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.interference::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.35;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.32) 0 1px,
+    transparent 1px 3px
+  );
+}
+
+.interference::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  opacity: 0.3;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
+  animation: grain-drift 900ms steps(3, end) infinite;
+}
+
+@keyframes grain-drift {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(-3%, 2%); }
+  66%  { transform: translate(2%, -3%); }
+  100% { transform: translate(0, 0); }
 }
 
 #root {
+  position: relative;
+  z-index: 3;
   width: 100%;
-  max-width: 960px;
   margin: 0 auto;
   min-height: 100vh;
   display: flex;
@@ -67,46 +182,43 @@ body {
   box-sizing: border-box;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
+h1, h2, h3 {
+  font-family: var(--display);
+  color: var(--bone);
+  font-weight: 700;
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+h1 {
+  font-size: 46px;
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+@media (max-width: 1024px) {
+  h1 { font-size: 32px; }
+}
+
+h2 { font-size: 24px; }
+p { margin: 0; }
+
+::selection {
+  background: rgba(143, 13, 24, 0.55);
+  color: var(--bone);
+}
+
+:focus-visible {
+  outline: 1px solid var(--blood-lit);
+  outline-offset: 3px;
+}
+
+/* Respect a stated preference for stillness — kill every ambient animation */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
 }

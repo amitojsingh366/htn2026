@@ -1,0 +1,278 @@
+/* ==========================================================================
+   Roster — the survivor board: who is still answering the call
+   ========================================================================== */
+
+.roster {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.roster-header {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.roster-title {
+  font-size: clamp(38px, 7vw, 72px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f0dede;
+  text-shadow:
+    0 0 26px rgba(217, 60, 60, 0.55),
+    0 0 72px rgba(143, 13, 24, 0.45),
+    0 3px 0 rgba(0, 0, 0, 0.9);
+  animation: gaslight 7s ease-in-out infinite;
+}
+
+/* Unsteady lamplight on the title */
+@keyframes gaslight {
+  0%, 100%  { opacity: 1; }
+  41%, 43%  { opacity: 0.86; }
+  42%       { opacity: 0.66; }
+  74%       { opacity: 0.93; }
+}
+
+.roster-count {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--rot-lit);
+  text-shadow: 0 0 14px var(--rot-glow);
+}
+
+.roster-count-of {
+  color: var(--ash-dim);
+  text-shadow: none;
+}
+
+/* ---------- Panel ---------- */
+
+.roster-panel {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px 26px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%),
+    radial-gradient(120% 90% at 50% 0%, rgba(163, 16, 28, 0.2), transparent 64%),
+    var(--glass);
+  backdrop-filter: blur(9px) saturate(0.85);
+  -webkit-backdrop-filter: blur(9px) saturate(0.85);
+  border: 1px solid rgba(163, 16, 28, 0.38);
+  border-radius: 4px;
+  box-shadow:
+    var(--pall),
+    inset 0 0 70px rgba(0, 0, 0, 0.55),
+    0 0 40px rgba(143, 13, 24, 0.14);
+}
+
+/* Corner fittings, like brackets on an iron casket */
+.roster-panel::before,
+.roster-panel::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(217, 60, 60, 0.6);
+  pointer-events: none;
+}
+
+.roster-panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.roster-panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.roster-empty {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ash-dim);
+  text-align: center;
+  padding: 18px 0;
+}
+
+/* ---------- Columns ---------- */
+
+.roster-columns {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  gap: 0 22px;
+  align-items: start;
+}
+
+/* Hairline divider between the two camps, fading out at both ends */
+.roster-columns::before {
+  content: '';
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(255, 255, 255, 0.12) 18%,
+    rgba(255, 255, 255, 0.12) 82%,
+    transparent
+  );
+}
+
+.roster-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.roster-column.tone-stable   { grid-column: 1; }
+.roster-column.tone-infected { grid-column: 3; }
+
+@media (max-width: 620px) {
+  .roster-columns { grid-template-columns: 1fr; gap: 22px; }
+  .roster-columns::before { display: none; }
+  .roster-column.tone-stable,
+  .roster-column.tone-infected { grid-column: 1; }
+}
+
+/* ---------- Column heading ---------- */
+
+.roster-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.roster-column-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.roster-column-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-indent: 0.26em;
+  text-transform: uppercase;
+}
+
+.roster-column-tally {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--bone);
+}
+
+.tone-stable .roster-column-dot {
+  background: var(--rot-lit);
+  box-shadow: 0 0 9px var(--rot-glow);
+  animation: vitals 2.6s ease-in-out infinite;
+}
+
+.tone-stable .roster-column-label { color: var(--rot-lit); }
+
+@keyframes vitals {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+.tone-infected .roster-column-dot {
+  background: var(--blood-lit);
+  box-shadow: 0 0 9px var(--blood-glow);
+}
+
+.tone-infected .roster-column-label {
+  color: var(--blood-lit);
+  text-shadow: 0 0 12px var(--blood-glow);
+}
+
+/* ---------- Entries ---------- */
+
+.roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 40vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(217, 60, 60, 0.45) transparent;
+}
+
+.roster-list::-webkit-scrollbar { width: 6px; }
+.roster-list::-webkit-scrollbar-thumb {
+  background: rgba(217, 60, 60, 0.4);
+  border-radius: 3px;
+}
+
+.roster-entry {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 11px;
+  padding: 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.roster-entry:last-child { border-bottom: 0; }
+
+.roster-index {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--ash-dim);
+}
+
+.roster-name {
+  font-family: var(--display);
+  font-size: 19px;
+  letter-spacing: 0.04em;
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The turned are struck from the register */
+.tone-infected .roster-name {
+  color: var(--ash-dim);
+  text-decoration: line-through;
+  text-decoration-color: rgba(217, 60, 60, 0.75);
+  text-decoration-thickness: 1px;
+}
+
+/* Entries the cap left off the board */
+.roster-more {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--ash-dim);
+  padding-top: 2px;
+}
