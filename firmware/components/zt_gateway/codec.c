@@ -469,6 +469,13 @@ static void command_fields(decoder_t *d, int object, zt_gateway_command_t *c)
             (r->role == ZT_ROLE_HUMAN && (cause.slot != ZT_SLOT_INVALID || cause.seq)) ||
             (r->role == ZT_ROLE_ZOMBIE && (cause.slot != c->target || cause.seq > r->covered_seq)))
             d->error = ZT_ERR_PROTOCOL;
+    } else if (equal(d, type, "ANNOUNCE")) {
+        c->type = ZT_CMD_ANNOUNCE;
+        char text[ZT_ANNOUNCE_MAX_LEN + 1];
+        size_t len = string_value(d, field(d, object, "text"), text, sizeof(text), ZT_ANNOUNCE_MIN_LEN);
+        c->args.announce.text_len = len;
+        memcpy(c->args.announce.text, text, len);
+        if (c->valid_until_elapsed_ms == ZT_COMMAND_NO_EXPIRY) d->error = ZT_ERR_PROTOCOL;
     } else if (equal(d, type, "RESET_GAME")) {
         c->type = ZT_CMD_RESET_GAME;
         if (c->target >= ZT_MAX_PLAYERS || c->valid_until_elapsed_ms != UINT32_MAX)

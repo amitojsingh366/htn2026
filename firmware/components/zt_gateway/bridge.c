@@ -361,6 +361,8 @@ static void commands_service(uint64_t now)
         /* Game owner also applies the fresh sample carried in START. */
     } else if (c->type==ZT_CMD_ROLE_SET)
         r=zt_wire_encode_role_set_args(&c->args.role_set,target.command.args,sizeof(target.command.args),&size);
+    else if (c->type==ZT_CMD_ANNOUNCE)
+        r=zt_wire_encode_announce_args(&c->args.announce,target.command.args,sizeof(target.command.args),&size);
     else if (c->type==ZT_CMD_END_ROUND)
         r=zt_wire_encode_end_round_args(&c->args.end,target.command.args,sizeof(target.command.args),&size);
     else if (c->type==ZT_CMD_FINAL_RESULT)
