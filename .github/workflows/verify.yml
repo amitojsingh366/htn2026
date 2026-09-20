@@ -27,6 +27,7 @@ jobs:
         working-directory: frontend
         run: |
           npm run lint
+          npm test
           npm run build
       - name: Install backend
         working-directory: backend
@@ -39,3 +40,5 @@ jobs:
           npm run typecheck
           npm test
           npx wrangler deploy --dry-run --outdir /tmp/zombie-tag-worker
+      - name: Check host diagnostic wire format
+        run: sh firmware/tests/run_gateway_diagnostics.sh
