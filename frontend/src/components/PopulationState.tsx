@@ -6,6 +6,15 @@ export interface PopulationStateData {
   num_infected: number;
   num_humans: number;
   survived_pct: number;
+  game_over?: boolean;
+  started_at?: number | null;
+  patient_zero_id?: string | null;
+  rankings?: Array<{
+    rank: number;
+    device_id: string;
+    state: string;
+    survival_time_seconds: number;
+  }>;
 }
 
 export interface PopulationStateProps {
@@ -60,12 +69,12 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
   // Manual values override handler
   useEffect(() => {
     if (manualTotal !== undefined && manualInfected !== undefined) {
-      const humans = Math.max(0, manualTotal - manualInfected);
-      const ratio = manualTotal > 0 ? (humans / manualTotal) * 100 : 0;
+      const survivors = Math.max(0, manualTotal - manualInfected);
+      const ratio = manualTotal > 0 ? (survivors / manualTotal) * 100 : 0;
       const customData: PopulationStateData = {
         num_players: manualTotal,
         num_infected: manualInfected,
-        num_humans: humans,
+        num_humans: survivors,
         survived_pct: Number(ratio.toFixed(1)),
       };
       setData(customData);
@@ -83,14 +92,18 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
         const json = await res.json();
         const total = manualTotal ?? json.num_players ?? 0;
         const infected = manualInfected ?? json.num_infected ?? 0;
-        const humans = json.num_humans ?? Math.max(0, total - infected);
-        const pct = json.survived_pct ?? (total > 0 ? (humans / total) * 100 : 0);
+        const survivors = json.num_humans ?? Math.max(0, total - infected);
+        const pct = json.survived_pct ?? (total > 0 ? (survivors / total) * 100 : 0);
 
         const updated: PopulationStateData = {
           num_players: total,
           num_infected: infected,
-          num_humans: humans,
+          num_humans: survivors,
           survived_pct: Number(pct.toFixed(1)),
+          game_over: json.game_over,
+          started_at: json.started_at,
+          patient_zero_id: json.patient_zero_id,
+          rankings: json.rankings,
         };
 
         setData(updated);
@@ -134,14 +147,18 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
             const rawData = JSON.parse(event.data);
             const total = manualTotal ?? rawData.num_players ?? 0;
             const infected = manualInfected ?? rawData.num_infected ?? 0;
-            const humans = rawData.num_humans ?? Math.max(0, total - infected);
-            const pct = rawData.survived_pct ?? (total > 0 ? (humans / total) * 100 : 0);
+            const survivors = rawData.num_humans ?? Math.max(0, total - infected);
+            const pct = rawData.survived_pct ?? (total > 0 ? (survivors / total) * 100 : 0);
 
             const updated: PopulationStateData = {
               num_players: total,
               num_infected: infected,
-              num_humans: humans,
+              num_humans: survivors,
               survived_pct: Number(pct.toFixed(1)),
+              game_over: rawData.game_over,
+              started_at: rawData.started_at,
+              patient_zero_id: rawData.patient_zero_id,
+              rankings: rawData.rankings,
             };
 
             setData(updated);
@@ -198,7 +215,7 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
   // Derived percentages for progress bar rendering
   const total = data.num_players > 0 ? data.num_players : data.num_humans + data.num_infected;
-  const humanPct = total > 0 ? Math.min(100, Math.max(0, (data.num_humans / total) * 100)) : 0;
+  const survivorPct = total > 0 ? Math.min(100, Math.max(0, (data.num_humans / total) * 100)) : 0;
   const infectedPct = total > 0 ? Math.min(100, Math.max(0, (data.num_infected / total) * 100)) : 0;
 
   return (
@@ -246,9 +263,9 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
       {/* Progress Bar */}
       <div className="population-progress-track">
         <div
-          className="population-progress-humans"
-          style={{ width: `${humanPct}%` }}
-          aria-label={`${humanPct.toFixed(1)}% humans`}
+          className="population-progress-survivors"
+          style={{ width: `${survivorPct}%` }}
+          aria-label={`${survivorPct.toFixed(1)}% survivors`}
         />
         <div
           className="population-progress-zombies"
@@ -259,9 +276,9 @@ export const PopulationState: React.FC<PopulationStateProps> = ({
 
       {/* Footer Stats Row */}
       <div className="population-state-footer">
-        <div className="population-stat-humans">
-          <span className="stat-dot dot-humans" aria-hidden="true" />
-          <span>Humans: {data.num_humans}</span>
+        <div className="population-stat-survivors">
+          <span className="stat-dot dot-survivors" aria-hidden="true" />
+          <span>Survivors: {data.num_humans}</span>
         </div>
 
         <div className="population-stat-zombies">
